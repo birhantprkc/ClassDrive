@@ -74,9 +74,18 @@
                 {{ item.joinCode || "未生成" }}
               </td>
               <td>
-                <span class="classes-management__status" :class="{ 'classes-management__status--active': item.joinCodeStatus === 'active' }">
-                  {{ item.joinCodeStatus === "active" ? "开放注册" : "暂停注册" }}
-                </span>
+                <div class="classes-management__status-cell">
+                  <span class="classes-management__status" :class="{ 'classes-management__status--active': item.joinCodeStatus === 'active' }">
+                    {{ item.joinCodeStatus === "active" ? "开放注册" : "暂停注册" }}
+                  </span>
+                  <span
+                    v-if="item.examLockEnabled"
+                    class="classes-management__status classes-management__status--locked"
+                    :data-testid="`class-row-exam-lock-${item.id}`"
+                  >
+                    考试锁定中
+                  </span>
+                </div>
               </td>
               <td class="files-table__actions">
                 <div class="classes-management__actions" :data-testid="`class-row-actions-${item.id}`">
@@ -88,6 +97,15 @@
                     @click="toggleRegistration(item)"
                   >
                     {{ item.joinCodeStatus === "active" ? "关闭注册" : "开放注册" }}
+                  </button>
+                  <button
+                    class="button"
+                    :class="item.examLockEnabled ? 'button--danger' : 'button--secondary'"
+                    type="button"
+                    :data-testid="`class-exam-lock-toggle-${item.id}`"
+                    @click="toggleExamLock(item)"
+                  >
+                    {{ item.examLockEnabled ? "解除考试锁定" : "考试锁定" }}
                   </button>
                   <button class="button button--ghost" type="button" :data-testid="`class-students-${item.id}`" @click="openStudentsDrawer(item)">
                     学生管理
@@ -120,6 +138,7 @@
             <span class="classes-management__status" :class="{ 'classes-management__status--active': studentDrawerClass.joinCodeStatus === 'active' }">
               {{ classRegistrationLabel(studentDrawerClass) }}
             </span>
+            <span v-if="studentDrawerClass.examLockEnabled" class="classes-management__status classes-management__status--locked">考试锁定中</span>
             <span v-if="studentDrawerClass.joinCode" class="class-students-drawer__join-code">注册码 {{ studentDrawerClass.joinCode }}</span>
           </div>
         </div>
@@ -442,6 +461,20 @@ async function toggleRegistration(item: ClassItem) {
   }
 }
 
+async function toggleExamLock(item: ClassItem) {
+  try {
+    const enabled = !item.examLockEnabled;
+    const updated = await classesStore.updateExamLock(item.id, enabled);
+    listedClasses.value = listedClasses.value.map((current) => (current.id === item.id ? updated : current));
+    if (studentDrawerClass.value?.id === item.id) {
+      studentDrawerClass.value = updated;
+    }
+    toastStore.push(enabled ? "warning" : "success", enabled ? "已开启考试锁定，学生无法下载和预览历史提交" : "已解除考试锁定");
+  } catch (error) {
+    toastStore.push("error", error instanceof ApiError ? error.message : "更新考试锁定失败");
+  }
+}
+
 watch(() => route.fullPath, () => {
   void loadClassesPage();
 }, { immediate: true });
@@ -534,6 +567,19 @@ watch(() => route.fullPath, () => {
   border-color: rgba(28, 117, 99, 0.18);
   background: rgba(28, 117, 99, 0.12);
   color: var(--success);
+}
+
+.classes-management__status-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.classes-management__status--locked {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--accent-danger, #dc2626);
 }
 
 .classes-management__actions {

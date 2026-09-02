@@ -34,7 +34,7 @@
           <span class="muted">{{ itemMeta(row.item) }}</span>
         </div>
         <div class="submission-file-grid__actions">
-          <a class="button button--secondary" :href="downloadUrl(row.item)" :data-testid="resolveDownloadTestId(row.item.id)">
+          <a v-if="downloadable" class="button button--secondary" :href="downloadUrl(row.item)" :data-testid="resolveDownloadTestId(row.item.id)">
               {{ row.item.kind === "dir" ? "下载压缩包" : "下载" }}
           </a>
           <button
@@ -76,6 +76,7 @@ const props = withDefaults(defineProps<{
   emptyMessage?: string;
   gridSize?: SubmissionFileGridSize;
   deletable?: boolean;
+  downloadable?: boolean;
 }>(), {
   testId: "submission-file-grid",
   itemTestIdPrefix: "submission-file",
@@ -86,6 +87,7 @@ const props = withDefaults(defineProps<{
   emptyMessage: "",
   gridSize: "medium",
   deletable: false,
+  downloadable: true,
 });
 
 defineEmits<{
@@ -131,7 +133,7 @@ function isImagePreview(item: AssignmentAttachmentItem): boolean {
 }
 
 function canPreview(item: AssignmentAttachmentItem): boolean {
-  return item.kind === "file" && previewKind(item) !== "external" && Boolean((item.previewUrl || item.downloadUrl).trim());
+  return props.downloadable && item.kind === "file" && previewKind(item) !== "external" && Boolean((item.previewUrl || item.downloadUrl).trim());
 }
 
 function previewKindLabel(item: AssignmentAttachmentItem): string {

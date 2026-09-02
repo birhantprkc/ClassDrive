@@ -141,6 +141,7 @@
                 <h3>当前提交</h3>
                 <p class="muted" v-if="assignment.submission">更新：{{ formatStudentAssignmentDateTime(assignment.submission.updatedAt) }}</p>
                 <p class="muted" v-else>{{ uiCopy.emptyStudentSubmissionFiles }}</p>
+                <p v-if="examLocked && items.length" class="form-error" data-testid="student-submission-exam-locked-hint">考试期间已暂时关闭历史提交的预览和下载。</p>
               </div>
               <div v-if="items.length" class="student-assignment-detail__file-toolbar">
                 <div class="student-assignment-detail__file-view" role="group" aria-label="当前提交视图">
@@ -236,7 +237,7 @@
                     <td>
                       <div class="student-assignment-detail__file-actions">
                         <button
-                          v-if="canPreviewCurrentSubmissionItem(row.item)"
+                          v-if="canPreviewCurrentSubmissionItem(row.item) && !examLocked"
                           class="text-button"
                           type="button"
                           :data-testid="`student-assignment-submission-preview-${row.item.id}`"
@@ -245,6 +246,7 @@
                           预览
                         </button>
                         <a
+                          v-if="!examLocked"
                           class="text-button"
                           :href="currentSubmissionDownloadUrl(row.item)"
                           :data-testid="`student-assignment-submission-download-${row.item.id}`"
@@ -277,6 +279,7 @@
               download-test-id-prefix="student-assignment-submission-download"
               delete-test-id-prefix="student-assignment-submission-delete"
               :deletable="canModifyCurrentSubmission"
+              :downloadable="!examLocked"
               @preview="openCurrentSubmissionPreview"
               @delete="deleteCurrentSubmissionItem"
             />
@@ -522,6 +525,7 @@ const {
   submitAssignment: submitAssignmentFiles,
   deleteSubmissionFile,
 } = useStudentAssignmentDetail(assignmentId);
+const examLocked = computed(() => assignment.value?.examLocked ?? false);
 const currentSubmissionViewMode = ref<SubmissionFileViewMode>("grid");
 const currentSubmissionGridSize = ref<SubmissionFileGridSize>("medium");
 const teacherAttachmentResources = computed(() => (

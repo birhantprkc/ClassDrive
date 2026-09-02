@@ -133,6 +133,7 @@ export interface ClassItem {
   joinCodeHint?: string;
   registrationEnabled?: boolean;
   registrationExpiresAt?: string;
+  examLockEnabled?: boolean;
 }
 
 export interface PaginationPayload {
@@ -243,6 +244,7 @@ export interface StudentAssignmentDetail extends StudentAssignmentItem {
   submissionConstraints: StudentSubmissionConstraints;
   assignmentAttachments: AssignmentAttachmentItem[];
   items: AssignmentAttachmentItem[];
+  examLocked?: boolean;
 }
 
 export interface RecentCopyTargetItem {
@@ -999,6 +1001,15 @@ export const api = {
   },
   updateClassRegistration(classId: number, enabled: boolean) {
     return request<{ classId: number; joinCode: string; joinCodeHint: string; joinCodeStatus: string; registrationEnabled: boolean; registrationExpiresAt: string }>(`/api/classes/${classId}/join-code`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled }),
+    });
+  },
+  updateClassExamLock(classId: number, enabled: boolean) {
+    return request<ClassItem>(`/api/classes/${classId}/exam-lock`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",

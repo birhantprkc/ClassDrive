@@ -448,6 +448,10 @@ type updateClassRegistrationRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+type updateClassExamLockRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 type classJoinCodeResult struct {
 	ClassID               int64  `json:"classId"`
 	JoinCode              string `json:"joinCode"`
@@ -585,6 +589,7 @@ type classSummary struct {
 	JoinCodeHint          string `json:"joinCodeHint"`
 	RegistrationEnabled   bool   `json:"registrationEnabled"`
 	RegistrationExpiresAt string `json:"registrationExpiresAt"`
+	ExamLockEnabled       bool   `json:"examLockEnabled"`
 }
 
 type fileSummary struct {
@@ -739,6 +744,7 @@ type studentAssignmentDetail struct {
 	SubmissionConstraints  studentSubmissionConstraints `json:"submissionConstraints"`
 	AssignmentAttachments  []fileSummary                `json:"assignmentAttachments"`
 	Items                  []fileSummary                `json:"items"`
+	ExamLocked             bool                         `json:"examLocked"`
 }
 
 type assignmentSubmissionSummary struct {
@@ -1481,6 +1487,15 @@ func (app *App) handleStudentAssignmentByID(writer http.ResponseWriter, request 
 			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
 			return
 		}
+		locked, err := app.isClassExamLocked(student.ClassID)
+		if err != nil {
+			app.writeError(writer, http.StatusInternalServerError, "internal_error", "服务异常")
+			return
+		}
+		if locked {
+			app.writeError(writer, http.StatusForbidden, "exam_locked", "考试期间已禁止下载和预览历史提交")
+			return
+		}
 		entry, err := app.findStudentSubmissionFileByID(assignmentID, student, fileID)
 		if err != nil {
 			app.writeDomainError(writer, err)
@@ -2053,6 +2068,25 @@ func (app *App) handleClassByID(writer http.ResponseWriter, request *http.Reques
 		default:
 			app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
 		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "exam-lock" {
+		if request.Method != http.MethodPatch {
+			app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
+			return
+		}
+		var payload updateClassExamLockRequest
+		if err := decodeJSONBody(request, &payload); err != nil {
+			app.writeError(writer, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+			return
+		}
+		result, updateErr := app.updateClassExamLock(classID, payload.Enabled)
+		if updateErr != nil {
+			app.writeDomainError(writer, updateErr)
+			return
+		}
+		app.writeJSON(writer, http.StatusOK, result)
 		return
 	}
 
@@ -3276,6 +3310,7 @@ type classRecord struct {
 	JoinCode              string
 	RegistrationEnabled   bool
 	RegistrationExpiresAt string
+	ExamLockEnabled       bool
 }
 
 type studentRecord struct {
@@ -5138,7 +5173,8 @@ create table if not exists classes (
   name text not null unique,
   join_code text not null default '',
   registration_enabled integer not null default 0,
-  registration_expires_at text not null default ''
+  registration_expires_at text not null default '',
+  exam_lock_enabled integer not null default 0
 );
 
 create table if not exists sessions (
@@ -5288,6 +5324,9 @@ create index if not exists idx_library_shares_entry on library_shares (entry_id)
 	if err := app.ensureClassesRegistrationExpiresAtColumn(); err != nil {
 		return err
 	}
+	if err := app.ensureClassesExamLockEnabledColumn(); err != nil {
+		return err
+	}
 	if err := app.ensureStudentsAuthColumns(); err != nil {
 		return err
 	}
@@ -5395,6 +5434,12 @@ func (app *App) ensureClassesRegistrationEnabledColumn() error {
 func (app *App) ensureClassesRegistrationExpiresAtColumn() error {
 	return app.ensureColumns("classes", []columnDef{
 		{Name: "registration_expires_at", AlterSQL: `alter table classes add column registration_expires_at text not null default ''`},
+	})
+}
+
+func (app *App) ensureClassesExamLockEnabledColumn() error {
+	return app.ensureColumns("classes", []columnDef{
+		{Name: "exam_lock_enabled", AlterSQL: `alter table classes add column exam_lock_enabled integer not null default 0`},
 	})
 }
 
@@ -5669,7 +5714,7 @@ func (app *App) listClassesPage(query teacherListQuery) ([]classSummary, paginat
 		orderBy = ` order by registration_enabled asc, name asc, id asc`
 	}
 
-	listQuery := `select id, name, join_code, registration_enabled, registration_expires_at from classes` + whereClause + orderBy
+	listQuery := `select id, name, join_code, registration_enabled, registration_expires_at, exam_lock_enabled from classes` + whereClause + orderBy
 	listArgs := append([]any{}, args...)
 	if query.Paged {
 		listQuery += ` limit ? offset ?`
@@ -5688,10 +5733,11 @@ func (app *App) listClassesPage(query teacherListQuery) ([]classSummary, paginat
 		var joinCode string
 		var registrationEnabled bool
 		var registrationExpiresAt string
-		if err := rows.Scan(&id, &name, &joinCode, &registrationEnabled, &registrationExpiresAt); err != nil {
+		var examLockEnabled bool
+		if err := rows.Scan(&id, &name, &joinCode, &registrationEnabled, &registrationExpiresAt, &examLockEnabled); err != nil {
 			return nil, paginationPayload{}, err
 		}
-		classes = append(classes, buildClassSummary(id, name, joinCode, registrationEnabled, registrationExpiresAt))
+		classes = append(classes, buildClassSummary(id, name, joinCode, registrationEnabled, registrationExpiresAt, examLockEnabled))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, paginationPayload{}, err
@@ -6130,7 +6176,7 @@ func (app *App) createClass(name string) (*classSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	summary := buildClassSummary(classID, cleanName, "", false, "")
+	summary := buildClassSummary(classID, cleanName, "", false, "", false)
 	return &summary, nil
 }
 
@@ -6146,7 +6192,8 @@ func (app *App) updateClass(classID int64, name string) (*classSummary, error) {
 	var joinCode string
 	var registrationEnabled bool
 	var registrationExpiresAt string
-	if err := app.db.QueryRow(`select join_code, registration_enabled, registration_expires_at from classes where id = ?`, classID).Scan(&joinCode, &registrationEnabled, &registrationExpiresAt); err != nil {
+	var examLockEnabled bool
+	if err := app.db.QueryRow(`select join_code, registration_enabled, registration_expires_at, exam_lock_enabled from classes where id = ?`, classID).Scan(&joinCode, &registrationEnabled, &registrationExpiresAt, &examLockEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domainError{Status: http.StatusNotFound, Code: "not_found", Message: "班级不存在"}
 		}
@@ -6160,7 +6207,31 @@ func (app *App) updateClass(classID int64, name string) (*classSummary, error) {
 		return nil, err
 	}
 
-	summary := buildClassSummary(classID, cleanName, joinCode, registrationEnabled, registrationExpiresAt)
+	summary := buildClassSummary(classID, cleanName, joinCode, registrationEnabled, registrationExpiresAt, examLockEnabled)
+	return &summary, nil
+}
+
+func (app *App) updateClassExamLock(classID int64, enabled bool) (*classSummary, error) {
+	if classID <= 0 {
+		return nil, domainError{Status: http.StatusNotFound, Code: "not_found", Message: "班级不存在"}
+	}
+
+	var name string
+	var joinCode string
+	var registrationEnabled bool
+	var registrationExpiresAt string
+	if err := app.db.QueryRow(`select name, join_code, registration_enabled, registration_expires_at from classes where id = ?`, classID).Scan(&name, &joinCode, &registrationEnabled, &registrationExpiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, domainError{Status: http.StatusNotFound, Code: "not_found", Message: "班级不存在"}
+		}
+		return nil, err
+	}
+
+	if _, err := app.db.Exec(`update classes set exam_lock_enabled = ? where id = ?`, boolToInt(enabled), classID); err != nil {
+		return nil, err
+	}
+
+	summary := buildClassSummary(classID, name, joinCode, registrationEnabled, registrationExpiresAt, enabled)
 	return &summary, nil
 }
 
@@ -7847,6 +7918,10 @@ func (app *App) getStudentAssignmentDetail(assignmentID int64, student studentRe
 	if err != nil {
 		return nil, err
 	}
+	examLocked, err := app.isClassExamLocked(student.ClassID)
+	if err != nil {
+		return nil, err
+	}
 	return &studentAssignmentDetail{
 		ID:                     assignment.ID,
 		ClassID:                assignment.ClassID,
@@ -7864,6 +7939,7 @@ func (app *App) getStudentAssignmentDetail(assignmentID int64, student studentRe
 		SubmissionConstraints:  studentSubmissionConstraintsPayloadForCategory(assignment.SubmissionTypeCategory),
 		AssignmentAttachments:  assignmentAttachments,
 		Items:                  items,
+		ExamLocked:             examLocked,
 	}, nil
 }
 
@@ -8858,9 +8934,9 @@ func (app *App) findStudentByID(studentID int64) (*studentResult, error) {
 }
 
 func (app *App) findClassByJoinCode(joinCode string) (*classRecord, error) {
-	row := app.db.QueryRow(`select id, name, join_code, registration_enabled, registration_expires_at from classes where join_code = ?`, strings.TrimSpace(joinCode))
+	row := app.db.QueryRow(`select id, name, join_code, registration_enabled, registration_expires_at, exam_lock_enabled from classes where join_code = ?`, strings.TrimSpace(joinCode))
 	var class classRecord
-	if err := row.Scan(&class.ID, &class.Name, &class.JoinCode, &class.RegistrationEnabled, &class.RegistrationExpiresAt); err != nil {
+	if err := row.Scan(&class.ID, &class.Name, &class.JoinCode, &class.RegistrationEnabled, &class.RegistrationExpiresAt, &class.ExamLockEnabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -9083,7 +9159,7 @@ func (app *App) refreshClassJoinCode(classID int64) (*classJoinCodeResult, error
 	return nil, errors.New("generate class join code failed after retries")
 }
 
-func buildClassSummary(classID int64, name string, joinCode string, registrationEnabled bool, registrationExpiresAt string) classSummary {
+func buildClassSummary(classID int64, name string, joinCode string, registrationEnabled bool, registrationExpiresAt string, examLockEnabled bool) classSummary {
 	cleanJoinCode := strings.TrimSpace(joinCode)
 	cleanRegistrationExpiresAt := strings.TrimSpace(registrationExpiresAt)
 	active := cleanJoinCode != "" && registrationEnabled && !isClassRegistrationExpired(cleanRegistrationExpiresAt, time.Now().UTC())
@@ -9100,9 +9176,21 @@ func buildClassSummary(classID int64, name string, joinCode string, registration
 		JoinCode:              cleanJoinCode,
 		JoinCodeStatus:        status,
 		JoinCodeHint:          buildJoinCodeHint(cleanJoinCode),
+		ExamLockEnabled:       examLockEnabled,
 		RegistrationEnabled:   active,
 		RegistrationExpiresAt: cleanRegistrationExpiresAt,
 	}
+}
+
+func (app *App) isClassExamLocked(classID int64) (bool, error) {
+	var enabled bool
+	if err := app.db.QueryRow(`select exam_lock_enabled from classes where id = ?`, classID).Scan(&enabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return enabled, nil
 }
 
 func isClassRegistrationExpired(registrationExpiresAt string, now time.Time) bool {
@@ -9748,6 +9836,12 @@ func operationLogSummary(method, requestPath string) string {
 	case "student":
 		return studentOperationSummary(method, segments)
 	case "classes":
+		if len(segments) >= 4 && segments[3] == "exam-lock" && method == http.MethodPatch {
+			return "切换班级考试锁定"
+		}
+		if len(segments) >= 4 && segments[3] == "join-code" {
+			return methodOperationSummary(method, "刷新班级注册码", "切换班级注册状态", "关闭班级注册")
+		}
 		return methodOperationSummary(method, "创建班级", "修改班级", "删除班级")
 	case "students":
 		return methodOperationSummary(method, "新增学生", "修改学生", "删除学生")

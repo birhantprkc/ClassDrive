@@ -10,6 +10,7 @@ function cloneClassItem(item: ClassItem): ClassItem {
     joinCodeHint: item.joinCodeHint,
     registrationEnabled: item.registrationEnabled,
     registrationExpiresAt: item.registrationExpiresAt,
+    examLockEnabled: item.examLockEnabled,
   };
 }
 
@@ -84,6 +85,11 @@ export const useClassesStore = defineStore("classes", {
           : item,
       );
       return result;
+    },
+    async updateExamLock(classId: number, enabled: boolean) {
+      const updated = await api.updateClassExamLock(classId, enabled);
+      this.classes = this.classes.map((item) => (item.id === classId ? cloneClassItem(updated) : item));
+      return updated;
     },
   },
 });
