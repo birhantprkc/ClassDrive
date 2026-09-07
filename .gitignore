@@ -34,6 +34,7 @@ frontend/test-results/
 tmp/
 test-results/
 *.exe
+*.exe~
 *.test
 *.out
 *.zip

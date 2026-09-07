@@ -36,7 +36,12 @@
 
 ## 版本号
 
-程序内显示的版本号在 3 个文件的 `Ver: x.x` 字样:`frontend/src/components/SidebarNav.vue`、`frontend/src/layouts/StudentLayout.vue`、`frontend/src/views/LoginView.vue`。改版本号三处一起改。`RELEASE_CHECKLIST.md` 是某次发布的历史快照(带固定版本号和日期),不是模板,不要随版本号改动。
+程序内显示的版本号硬编码在 **6 处**,改版本号必须 6 处一起改,漏改测试会导致 `npm run test` 失败:
+
+- 源码(`Ver: x.x` 字样,共 3 处):`frontend/src/components/SidebarNav.vue`、`frontend/src/layouts/StudentLayout.vue`、`frontend/src/views/LoginView.vue`
+- 测试断言(共 3 处):`frontend/tests/app.spec.ts`(2 处:登录页页脚、侧边栏页脚)、`frontend/tests/student-layout.spec.ts`(1 处)
+
+改完用 `grep -rn "Ver: " frontend/src frontend/tests` 复核,应恰好 6 处且版本一致。`RELEASE_CHECKLIST.md` 是某次发布的历史快照(带固定版本号和日期),不是模板,不要随版本号改动。
 
 ## 文档
 

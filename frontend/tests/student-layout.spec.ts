@@ -76,7 +76,7 @@ describe("StudentLayout", () => {
     expect(wrapper.get('[data-testid="student-theme-toggle"]').exists()).toBe(true);
     const sidebarFooterLines = wrapper.get('[data-testid="student-sidebar-footer"]').findAll("span").map((line) => line.text());
     expect(sidebarFooterLines).toEqual([
-      "Author: wuerzh | Ver: 1.4",
+      "Author: wuerzh | Ver: 1.8",
       "WX/QQ: 709868663",
     ]);
     expect(wrapper.get('[data-testid="student-sidebar-footer"]').get('[data-testid="app-author-link"]').attributes("href")).toBe(

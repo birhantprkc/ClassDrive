@@ -231,7 +231,7 @@
           <th>操作</th>
         </tr>
       </thead>
-      <tbody v-if="!enableVirtualScroll">
+      <tbody>
         <tr
           v-for="(item, index) in displayedItems"
           :key="item.id"
@@ -331,113 +331,25 @@
           <td colspan="6" class="files-table__empty">{{ uiCopy.emptyDirectory }}</td>
         </tr>
       </tbody>
-      <tbody v-else class="files-table__virtual-body">
-        <RecycleScroller
-          :items="displayedItems"
-          :item-size="listItemSize"
-          key-field="id"
-          class="files-table-scroller"
-          v-slot="{ item }"
-        >
-          <tr
-            class="files-table__row"
-            role="button"
-            tabindex="0"
-            :aria-label="`打开 ${item.name}`"
-            @click="preview(item)"
-            @keydown.enter.self.prevent="preview(item)"
-            @keydown.space.self.prevent="preview(item)"
-          >
-            <td>
-              <input
-                :data-testid="`select-entry-${item.id}`"
-                type="checkbox"
-                :checked="isEntrySelected(item.id)"
-                @click.stop
-                @change="toggleEntrySelection(item.id, $event)"
-              />
-            </td>
-            <td>
-              <button
-                v-if="item.kind === 'dir'"
-                class="files-entry-link"
-                type="button"
-                :data-testid="`entry-open-${item.id}`"
-                @click.stop="openDirectory(item)"
-              >
-                <span :data-testid="`entry-name-${item.id}`">{{ item.name }}</span>
-              </button>
-              <span v-else :data-testid="`entry-name-${item.id}`">
-                {{ item.name }}
-              </span>
-              <p v-if="isSearching" class="files-entry-meta">{{ item.path }}</p>
-            </td>
-            <td>{{ item.kind === "dir" ? "文件夹" : "文件" }}</td>
-            <td :data-testid="`entry-updated-${item.id}`">{{ formatFileUpdatedAt(item.updatedAt) }}</td>
-            <td>{{ formatFileSize(item.size) }}</td>
-            <td class="files-table__actions">
-              <div class="files-entry-actions__primary" :data-testid="`row-primary-actions-${item.id}`">
-                <button class="text-button" type="button" :data-testid="`preview-entry-${item.id}`" @click.stop="preview(item)">{{ item.kind === "dir" ? "进入" : "预览" }}</button>
-                <button v-if="canEditFile(item)" class="text-button" type="button" :data-testid="`edit-entry-${item.id}`" @click.stop="openEditor(item)">编辑</button>
-                <a
-                  v-if="item.kind === 'dir' && item.archiveUrl"
-                  class="text-button"
-                  :data-testid="`download-entry-${item.id}`"
-                  :href="item.archiveUrl"
-                  @click.stop
-                >
-                  下载压缩包
-                </a>
-                <a
-                  v-else-if="item.downloadUrl"
-                  class="text-button"
-                  :data-testid="`download-entry-${item.id}`"
-                  :href="item.downloadUrl"
-                  @click.stop
-                >
-                  下载
-                </a>
-              </div>
-              <div class="files-entry-actions__overflow" :data-testid="`row-actions-overflow-${item.id}`">
-                <button
-                  class="text-button files-entry-actions__more"
-                  type="button"
-                  :data-testid="`row-more-actions-${item.id}`"
-                  :aria-expanded="isEntryActionMenuOpen(item.id)"
-                  @click.stop="toggleEntryActionMenu(item.id)"
-                >
-                  更多
-                </button>
-                <div
-                  v-show="isEntryActionMenuOpen(item.id)"
-                  class="files-entry-actions__secondary"
-                  :data-testid="`row-secondary-actions-${item.id}`"
-                >
-                  <button class="text-button" type="button" :data-testid="`copy-${item.id}`" @click.stop="openCopyDialog(item)">复制</button>
-                  <button class="text-button" type="button" :data-testid="`move-${item.id}`" @click.stop="openMoveDialog(item)">移动</button>
-                  <button v-if="space === 'library'" class="text-button" type="button" :data-testid="`share-${item.id}`" @click.stop="openShareDialog(item)">分享</button>
-                  <button class="text-button" type="button" @click.stop="rename(item)">重命名</button>
-                  <button class="text-button text-button--danger" type="button" @click.stop="remove(item)">删除</button>
-                </div>
-              </div>
-            </td>
-          </tr>
-        </RecycleScroller>
-        <tr v-if="!displayedItems.length">
-          <td colspan="6" class="files-table__empty">{{ uiCopy.emptyDirectory }}</td>
-        </tr>
-      </tbody>
     </table>
 
-    <div v-else-if="!enableVirtualScroll" class="files-grid" :class="filesGridSizeClass" data-testid="files-grid">
+    <div
+      v-else
+      class="files-grid"
+      :class="filesGridSizeClass"
+      data-testid="files-grid"
+      @keydown="handleListKeyboardNavigation"
+    >
       <article
-        v-for="item in displayedItems"
+        v-for="(item, index) in displayedItems"
         :key="item.id"
+        :data-item-id="item.id"
         class="files-grid__card"
         role="button"
         tabindex="0"
         :aria-label="`打开 ${item.name}`"
         @click="preview(item)"
+        @focus="handleItemFocus(index)"
         @keydown.enter.self.prevent="preview(item)"
         @keydown.space.self.prevent="preview(item)"
       >
@@ -534,118 +446,6 @@
 
       <p v-if="!displayedItems.length" class="files-table__empty">{{ uiCopy.emptyDirectory }}</p>
     </div>
-
-    <RecycleScroller
-      v-else
-      :items="displayedItems"
-      :item-size="gridItemSize"
-      :grid-items="gridColumns"
-      key-field="id"
-      class="files-grid files-grid-scroller"
-      :class="filesGridSizeClass"
-      data-testid="files-grid"
-      v-slot="{ item }"
-    >
-      <article
-        class="files-grid__card"
-        role="button"
-        tabindex="0"
-        :aria-label="`打开 ${item.name}`"
-        @click="preview(item)"
-        @keydown.enter.self.prevent="preview(item)"
-        @keydown.space.self.prevent="preview(item)"
-      >
-        <label class="files-grid__select" @click.stop>
-          <input
-            :data-testid="`select-entry-${item.id}`"
-            type="checkbox"
-            :checked="isEntrySelected(item.id)"
-            @click.stop
-            @change="toggleEntrySelection(item.id, $event)"
-          />
-          <span>{{ item.kind === "dir" ? "文件夹" : "文件" }}</span>
-        </label>
-
-        <button
-          v-if="resolveGridThumbnailUrl(item)"
-          class="files-grid__thumbnail-button"
-          type="button"
-          :data-testid="`grid-thumbnail-open-${item.id}`"
-          :aria-label="`预览 ${item.name}`"
-          @click.stop="preview(item)"
-        >
-          <img
-            class="files-grid__thumbnail"
-            :data-testid="`grid-thumbnail-${item.id}`"
-            :src="resolveGridThumbnailUrl(item) ?? ''"
-            :alt="item.name"
-            loading="lazy"
-            decoding="async"
-          />
-        </button>
-
-        <button
-          v-if="item.kind === 'dir'"
-          class="files-entry-link files-grid__title"
-          type="button"
-          :data-testid="`entry-open-${item.id}`"
-          @click.stop="openDirectory(item)"
-        >
-          <span :data-testid="`entry-name-${item.id}`">{{ item.name }}</span>
-        </button>
-        <div v-else class="files-grid__title" :data-testid="`entry-name-${item.id}`">{{ item.name }}</div>
-
-        <p v-if="isSearching" class="files-entry-meta">{{ item.path }}</p>
-        <p class="muted">{{ formatFileSize(item.size) }}</p>
-
-        <div class="files-grid__actions">
-          <div class="files-entry-actions__primary" :data-testid="`card-primary-actions-${item.id}`">
-            <button class="text-button" type="button" :data-testid="`preview-entry-${item.id}`" @click.stop="preview(item)">{{ item.kind === "dir" ? "进入" : "预览" }}</button>
-            <button v-if="canEditFile(item)" class="text-button" type="button" :data-testid="`edit-entry-${item.id}`" @click.stop="openEditor(item)">编辑</button>
-            <a
-              v-if="item.kind === 'dir' && item.archiveUrl"
-              class="text-button"
-              :data-testid="`download-entry-${item.id}`"
-              :href="item.archiveUrl"
-              @click.stop
-            >
-              下载压缩包
-            </a>
-            <a
-              v-else-if="item.downloadUrl"
-              class="text-button"
-              :data-testid="`download-entry-${item.id}`"
-              :href="item.downloadUrl"
-              @click.stop
-            >
-              下载
-            </a>
-          </div>
-          <div class="files-entry-actions__overflow" :data-testid="`card-actions-overflow-${item.id}`">
-            <button
-              class="text-button files-entry-actions__more"
-              type="button"
-              :data-testid="`card-more-actions-${item.id}`"
-              :aria-expanded="isEntryActionMenuOpen(item.id)"
-              @click.stop="toggleEntryActionMenu(item.id)"
-            >
-              更多
-            </button>
-            <div
-              v-show="isEntryActionMenuOpen(item.id)"
-              class="files-entry-actions__secondary"
-              :data-testid="`card-secondary-actions-${item.id}`"
-            >
-              <button class="text-button" type="button" :data-testid="`copy-${item.id}`" @click.stop="openCopyDialog(item)">复制</button>
-              <button class="text-button" type="button" :data-testid="`move-${item.id}`" @click.stop="openMoveDialog(item)">移动</button>
-              <button v-if="space === 'library'" class="text-button" type="button" :data-testid="`share-${item.id}`" @click.stop="openShareDialog(item)">分享</button>
-              <button class="text-button" type="button" @click.stop="rename(item)">重命名</button>
-              <button class="text-button text-button--danger" type="button" @click.stop="remove(item)">删除</button>
-            </div>
-          </div>
-        </div>
-      </article>
-    </RecycleScroller>
 
     </section>
 
@@ -942,8 +742,6 @@ import { canEditTextFile, getFilePreviewKind } from "@/utils/file-preview";
 import { uiCopy, uploadSuccessMessage } from "@/utils/ui-copy";
 import { collectDroppedUploadItems } from "@/utils/upload-drop";
 import { filterRedundantDirectoryArchives } from "@/utils/upload-items";
-import { RecycleScroller } from "vue-virtual-scroller";
-import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 
 interface BreadcrumbItem {
   label: string;
@@ -1123,24 +921,6 @@ const filteredCopyTargetFolders = computed(() => {
     return copyTargetFolders.value;
   }
   return copyTargetFolders.value.filter((item) => item.name.includes(keyword));
-});
-
-// 虚拟滚动配置
-const enableVirtualScroll = computed(() => displayedItems.value.length > 20);
-const listItemSize = 48; // 列表视图每行高度（px）
-const gridItemSize = computed(() => {
-  switch (gridSize.value) {
-    case 'small': return 200;
-    case 'large': return 320;
-    default: return 260;
-  }
-});
-const gridColumns = computed(() => {
-  switch (gridSize.value) {
-    case 'small': return 5;
-    case 'large': return 3;
-    default: return 4;
-  }
 });
 
 function normalizePath(value: string): string {
@@ -3219,68 +2999,6 @@ function handleItemFocus(index: number) {
   }
 }
 
-/* 虚拟滚动样式 */
-.files-table__virtual-body {
-  display: block;
-  width: 100%;
-}
-
-.files-table-scroller {
-  height: calc(100vh - 420px);
-  min-height: 400px;
-  overflow-y: auto;
-  display: block;
-  width: 100%;
-}
-
-.files-table-scroller .vue-recycle-scroller__item-wrapper {
-  display: table;
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-}
-
-.files-table-scroller .vue-recycle-scroller__item-view {
-  display: table-row;
-}
-
-.files-table-scroller .vue-recycle-scroller__item-view td {
-  display: table-cell;
-}
-
-.files-grid-scroller {
-  height: calc(100vh - 420px);
-  min-height: 400px;
-  overflow-y: auto;
-}
-
-.files-grid-scroller.vue-recycle-scroller {
-  display: grid;
-}
-
-.files-grid-scroller.files-grid--small.vue-recycle-scroller {
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 8px;
-}
-
-.files-grid-scroller.files-grid--medium.vue-recycle-scroller {
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.files-grid-scroller.files-grid--large.vue-recycle-scroller {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 14px;
-}
-
-.files-grid-scroller .vue-recycle-scroller__item-wrapper {
-  display: contents;
-}
-
-.files-grid-scroller .vue-recycle-scroller__item-view {
-  display: block;
-}
-
 /* 平板端优化 (768px - 1100px) */
 @media (max-width: 768px) {
   .files-toolbar__top,
@@ -3528,13 +3246,6 @@ function handleItemFocus(index: number) {
 
   .files-upload-dialog__choice {
     width: 100%;
-  }
-
-  /* 虚拟滚动容器高度调整 */
-  .files-table-scroller,
-  .files-grid-scroller {
-    height: calc(100vh - 500px);
-    min-height: 300px;
   }
 }
 
