@@ -149,6 +149,28 @@ func TestNormalizeRelativePath_AlwaysReturnsAbsolutePath(t *testing.T) {
 	}
 }
 
+func TestSanitizeStorageName_RejectsDangerousNames(t *testing.T) {
+	rejected := []string{
+		".", "..", "...", "报告.", "a:b", "con", "CON.txt", "nul", "lpt1", "com3.txt", `te"st`, "a?b", "a*b", "a<b", "a>b", "a|b",
+	}
+	for _, name := range rejected {
+		if _, err := sanitizeStorageName(name); err == nil {
+			t.Errorf("sanitizeStorageName(%q) expected error, got nil", name)
+		}
+	}
+
+	accepted := []string{"正常文件名.txt", "报告 v1.2.md", "constructor.md", "concept.png", "my.file.txt"}
+	for _, name := range accepted {
+		clean, err := sanitizeStorageName(name)
+		if err != nil {
+			t.Errorf("sanitizeStorageName(%q) unexpected error: %v", name, err)
+		}
+		if clean != name {
+			t.Errorf("sanitizeStorageName(%q) = %q, want unchanged", name, clean)
+		}
+	}
+}
+
 func startsWithSlash(s string) bool {
 	return len(s) > 0 && s[0] == '/'
 }

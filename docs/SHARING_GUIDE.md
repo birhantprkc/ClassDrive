@@ -190,6 +190,7 @@
 支持预览的文件类型：
 - 图片：JPG、PNG、GIF、SVG 等
 - 文档：PDF、TXT、Markdown 等
+- 网页：HTML（沙箱环境中预览，脚本无法访问系统数据）
 - 音视频：MP3、MP4、WAV、WebM 等
 
 ### 文件夹分享（访客视角）

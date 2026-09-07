@@ -98,20 +98,38 @@ func DefaultTeacherPasswordStartupText() string {
 	return DefaultTeacherPassword
 }
 
-var studentSubmissionAllowedExtensions = []string{".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".jpg", ".jpeg", ".png", ".zip", ".rar", ".7z"}
+var studentSubmissionAllowedExtensions = []string{
+	// 文档
+	".pdf", ".doc", ".docx", ".rtf", ".odt",
+	".xls", ".xlsx", ".csv",
+	".ppt", ".pptx",
+	".txt", ".md", ".markdown", ".html", ".htm",
+	// 数据与结构化文本（AI 输出常见）
+	".json", ".xml",
+	// 图片
+	".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".tif", ".tiff", ".avif",
+	// 音频
+	".mp3", ".wav", ".m4a", ".ogg", ".flac",
+	// 视频
+	".mp4", ".webm", ".mov", ".avi", ".mkv", ".wmv",
+	// 压缩包
+	".zip", ".rar", ".7z", ".tar", ".gz", ".tgz",
+	// WPS 办公
+	".wps", ".et", ".dps",
+}
 var studentSubmissionTypeExtensions = map[string][]string{
 	assignmentSubmissionTypeMixed:   studentSubmissionAllowedExtensions,
-	assignmentSubmissionTypeImage:   {".jpg", ".jpeg", ".png"},
-	assignmentSubmissionTypeWord:    {".doc", ".docx"},
+	assignmentSubmissionTypeImage:   {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".tif", ".tiff", ".avif"},
+	assignmentSubmissionTypeWord:    {".doc", ".docx", ".rtf", ".odt"},
 	assignmentSubmissionTypePDF:     {".pdf"},
-	assignmentSubmissionTypeArchive: {".zip", ".rar", ".7z"},
+	assignmentSubmissionTypeArchive: {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"},
 }
 var studentSubmissionTypeLabels = map[string]string{
 	assignmentSubmissionTypeMixed:   studentSubmissionAllowedTypesLabel,
-	assignmentSubmissionTypeImage:   "图片文件（JPG、JPEG、PNG）",
-	assignmentSubmissionTypeWord:    "Word 文档（DOC、DOCX）",
+	assignmentSubmissionTypeImage:   "图片文件（JPG、JPEG、PNG、GIF、WEBP、SVG、BMP 等）",
+	assignmentSubmissionTypeWord:    "Word 文档（DOC、DOCX、RTF、ODT）",
 	assignmentSubmissionTypePDF:     "PDF 文件",
-	assignmentSubmissionTypeArchive: "压缩包（ZIP、RAR、7Z）",
+	assignmentSubmissionTypeArchive: "压缩包（ZIP、RAR、7Z、TAR、GZ）",
 }
 var editableTextExtensions = map[string]struct{}{
 	".txt":      {},
@@ -131,7 +149,7 @@ var editableTextExtensions = map[string]struct{}{
 	".vue":      {},
 }
 
-const studentSubmissionAllowedTypesLabel = "PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP"
+const studentSubmissionAllowedTypesLabel = "PDF、Word、Excel、PPT、TXT、HTML、Markdown、CSV、JSON、图片、音视频、压缩包"
 
 //go:embed dist
 var frontendAssets embed.FS
@@ -850,10 +868,18 @@ func New(config Config) (http.Handler, error) {
 		}
 	}
 
-	dsn := filepath.Join(dbDir, "classdrive.db") + "?_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL"
+	// modernc.org/sqlite 只识别 _pragma 形式的 DSN 参数（其余参数会被静默忽略），
+	// 因此用 _pragma=busy_timeout(5000) 等写法；journal_mode 是文件级持久设置，
+	// 连接池每次新建连接都会执行 DSN 里的 pragma，改为在启动时单独设置一次，避免
+	// 并发建连时 journal_mode(WAL) 与进行中的事务冲突。
+	dsn := filepath.Join(dbDir, "classdrive.db") + "?_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := db.Exec(`pragma journal_mode = wal`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable sqlite wal mode: %w", err)
 	}
 
 	// Configure connection pool for better concurrency handling
@@ -1502,6 +1528,47 @@ func (app *App) handleStudentAssignmentByID(writer http.ResponseWriter, request 
 			return
 		}
 		app.serveSubmissionEntryDownload(writer, request, entry)
+	case len(parts) == 5 && parts[1] == "submission" && parts[2] == "files" && parts[4] == "preview":
+		if request.Method != http.MethodGet {
+			app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
+			return
+		}
+		fileID, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil || fileID <= 0 {
+			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
+			return
+		}
+		locked, err := app.isClassExamLocked(student.ClassID)
+		if err != nil {
+			app.writeError(writer, http.StatusInternalServerError, "internal_error", "服务异常")
+			return
+		}
+		if locked {
+			app.writeError(writer, http.StatusForbidden, "exam_locked", "考试期间已禁止下载和预览历史提交")
+			return
+		}
+		entry, err := app.findStudentSubmissionFileByID(assignmentID, student, fileID)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.serveFileEntryContent(writer, request, entry, false)
+	case len(parts) == 4 && parts[1] == "attachments" && parts[3] == "preview":
+		if request.Method != http.MethodGet {
+			app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
+			return
+		}
+		fileID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || fileID <= 0 {
+			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
+			return
+		}
+		entry, err := app.findStudentAssignmentAttachmentByID(assignmentID, student, fileID)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.serveFileEntryContent(writer, request, entry, false)
 	case len(parts) == 4 && parts[1] == "submission" && parts[2] == "files":
 		if request.Method != http.MethodDelete {
 			app.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "不支持的请求方法")
@@ -2243,14 +2310,21 @@ func (app *App) handleAssignmentByID(writer http.ResponseWriter, request *http.R
 			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
 			return
 		}
-		app.handleAssignmentAttachmentByID(writer, request, assignmentID, *classID, fileID, false)
+		app.handleAssignmentAttachmentByID(writer, request, assignmentID, *classID, fileID, "delete")
 	case len(parts) == 4 && parts[1] == "attachments" && parts[3] == "download":
 		fileID, parseErr := strconv.ParseInt(parts[2], 10, 64)
 		if parseErr != nil || fileID <= 0 {
 			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
 			return
 		}
-		app.handleAssignmentAttachmentByID(writer, request, assignmentID, *classID, fileID, true)
+		app.handleAssignmentAttachmentByID(writer, request, assignmentID, *classID, fileID, "download")
+	case len(parts) == 4 && parts[1] == "attachments" && parts[3] == "preview":
+		fileID, parseErr := strconv.ParseInt(parts[2], 10, 64)
+		if parseErr != nil || fileID <= 0 {
+			app.writeError(writer, http.StatusNotFound, "not_found", "附件不存在")
+			return
+		}
+		app.handleAssignmentAttachmentByID(writer, request, assignmentID, *classID, fileID, "preview")
 	case len(parts) == 2 && parts[1] == "submissions":
 		app.handleAssignmentSubmissions(writer, request, assignmentID, *classID)
 	case len(parts) == 3 && parts[1] == "submissions":
@@ -2309,16 +2383,23 @@ func (app *App) handleAssignmentAttachments(writer http.ResponseWriter, request 
 	}
 }
 
-func (app *App) handleAssignmentAttachmentByID(writer http.ResponseWriter, request *http.Request, assignmentID, classID, fileID int64, download bool) {
+func (app *App) handleAssignmentAttachmentByID(writer http.ResponseWriter, request *http.Request, assignmentID, classID, fileID int64, action string) {
 	switch {
-	case download && request.Method == http.MethodGet:
+	case action == "download" && request.Method == http.MethodGet:
 		entry, err := app.findAssignmentAttachmentByID(assignmentID, classID, fileID)
 		if err != nil {
 			app.writeDomainError(writer, err)
 			return
 		}
 		app.serveFileEntryContent(writer, request, entry, true)
-	case !download && request.Method == http.MethodDelete:
+	case action == "preview" && request.Method == http.MethodGet:
+		entry, err := app.findAssignmentAttachmentByID(assignmentID, classID, fileID)
+		if err != nil {
+			app.writeDomainError(writer, err)
+			return
+		}
+		app.serveFileEntryContent(writer, request, entry, false)
+	case action == "delete" && request.Method == http.MethodDelete:
 		if err := app.deleteAssignmentAttachment(assignmentID, classID, fileID); err != nil {
 			app.writeDomainError(writer, err)
 			return
@@ -2963,11 +3044,38 @@ func (app *App) serveFileEntryContent(writer http.ResponseWriter, request *http.
 		writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.Name))
 	} else {
 		writer.Header().Set("Content-Disposition", "inline")
+		// 预览安全加固：可执行内容（HTML/SVG）在沙箱环境渲染，
+		// 即使被直接在新标签页打开也无法以同源身份读取 Cookie/会话。
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		switch previewActiveContentKind(entry) {
+		case "html":
+			writer.Header().Set("Content-Security-Policy", "sandbox allow-scripts")
+		case "svg":
+			writer.Header().Set("Content-Security-Policy", "sandbox")
+		}
 	}
 	if entry.MimeType != "" {
 		writer.Header().Set("Content-Type", entry.MimeType)
 	}
 	http.ServeFile(writer, request, absolutePath)
+}
+
+func previewActiveContentKind(entry *fileEntry) string {
+	extension := strings.ToLower(path.Ext(strings.TrimSpace(entry.Name)))
+	switch extension {
+	case ".html", ".htm":
+		return "html"
+	case ".svg":
+		return "svg"
+	}
+	normalizedMimeType := strings.ToLower(strings.TrimSpace(strings.Split(entry.MimeType, ";")[0]))
+	switch normalizedMimeType {
+	case "text/html":
+		return "html"
+	case "image/svg+xml":
+		return "svg"
+	}
+	return ""
 }
 
 func (app *App) readFileContent(entryID int64) (fileContentResult, error) {
@@ -4522,10 +4630,48 @@ func sanitizeName(name string) (string, error) {
 	if trimmed == "" {
 		return "", errors.New("名称不能为空")
 	}
+	if trimmed == "." || trimmed == ".." {
+		return "", errors.New("名称不能为 . 或 ..")
+	}
 	if strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") {
 		return "", errors.New("名称不能包含路径分隔符")
 	}
 	return trimmed, nil
+}
+
+var windowsReservedFileNames = map[string]struct{}{
+	"con":  {},
+	"prn":  {},
+	"aux":  {},
+	"nul":  {},
+	"com1": {}, "com2": {}, "com3": {}, "com4": {}, "com5": {},
+	"com6": {}, "com7": {}, "com8": {}, "com9": {},
+	"lpt1": {}, "lpt2": {}, "lpt3": {}, "lpt4": {}, "lpt5": {},
+	"lpt6": {}, "lpt7": {}, "lpt8": {}, "lpt9": {},
+}
+
+// sanitizeStorageName 在 sanitizeName 基础上，追加文件系统级别的校验：
+// Windows 上句点结尾的名称会被系统静默截断（导致数据库与磁盘不一致），
+// 保留设备名（CON/NUL/COM1...）与非法字符无法作为文件名使用。
+func sanitizeStorageName(name string) (string, error) {
+	clean, err := sanitizeName(name)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasSuffix(clean, ".") {
+		return "", errors.New("名称不能以句点结尾")
+	}
+	if strings.ContainsAny(clean, `<>:"|?*`) {
+		return "", errors.New(`名称不能包含特殊字符 < > : " | ? *`)
+	}
+	base := clean
+	if dotIndex := strings.Index(clean, "."); dotIndex >= 0 {
+		base = clean[:dotIndex]
+	}
+	if _, reserved := windowsReservedFileNames[strings.ToLower(base)]; reserved {
+		return "", errors.New("名称不能使用系统保留名称")
+	}
+	return clean, nil
 }
 
 func sanitizeRequiredText(value, fieldName string) (string, error) {
@@ -4789,6 +4935,10 @@ func contentTypeForFile(name string, data []byte) string {
 	if byExtension != "" {
 		return byExtension
 	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".md", ".markdown":
+		return "text/markdown; charset=utf-8"
+	}
 	return http.DetectContentType(data)
 }
 
@@ -4971,7 +5121,7 @@ func (app *App) validateUploadSessionTarget(space string, classID *int64, parent
 	if err != nil {
 		return "", "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
-	cleanName, err := sanitizeName(fileName)
+	cleanName, err := sanitizeStorageName(fileName)
 	if err != nil {
 		return "", "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
@@ -6799,11 +6949,19 @@ func assignmentAttachmentParentPath(assignmentID int64) string {
 }
 
 func buildAssignmentAttachmentSummary(assignmentID, classID int64, entry fileEntry) fileSummary {
-	return buildFileSummary(entry, fmt.Sprintf("/api/assignments/%d/attachments/%d/download?classId=%d", assignmentID, entry.ID, classID), "")
+	previewURL := ""
+	if entry.Kind == "file" {
+		previewURL = fmt.Sprintf("/api/assignments/%d/attachments/%d/preview?classId=%d", assignmentID, entry.ID, classID)
+	}
+	return buildFileSummary(entry, fmt.Sprintf("/api/assignments/%d/attachments/%d/download?classId=%d", assignmentID, entry.ID, classID), previewURL)
 }
 
 func buildStudentAssignmentAttachmentSummary(assignmentID int64, entry fileEntry) fileSummary {
-	return buildFileSummary(entry, fmt.Sprintf("/api/student/assignments/%d/attachments/%d/download", assignmentID, entry.ID), "")
+	previewURL := ""
+	if entry.Kind == "file" {
+		previewURL = fmt.Sprintf("/api/student/assignments/%d/attachments/%d/preview", assignmentID, entry.ID)
+	}
+	return buildFileSummary(entry, fmt.Sprintf("/api/student/assignments/%d/attachments/%d/download", assignmentID, entry.ID), previewURL)
 }
 
 func (app *App) listAssignmentAttachments(assignmentID, classID int64) ([]fileSummary, error) {
@@ -6914,7 +7072,11 @@ func submissionIDFromEntryPath(entry *fileEntry) (int64, bool) {
 }
 
 func (app *App) buildStudentSubmissionFileSummary(assignmentID int64, entry fileEntry) fileSummary {
-	summary := buildFileSummary(entry, fmt.Sprintf("/api/student/assignments/%d/submission/files/%d/download", assignmentID, entry.ID), "")
+	previewURL := ""
+	if entry.Kind == "file" {
+		previewURL = fmt.Sprintf("/api/student/assignments/%d/submission/files/%d/preview", assignmentID, entry.ID)
+	}
+	summary := buildFileSummary(entry, fmt.Sprintf("/api/student/assignments/%d/submission/files/%d/download", assignmentID, entry.ID), previewURL)
 	if entry.Kind == "dir" {
 		summary.ArchiveURL = summary.DownloadURL
 	}
@@ -9476,6 +9638,9 @@ func (app *App) studentOperationLogSummaryForRequest(request *http.Request, segm
 	if len(segments) == 7 && segments[2] == "assignments" && segments[4] == "attachments" && segments[6] == "download" {
 		return app.studentAssignmentAttachmentOperationLogSummary(request.Method, segments, actorID)
 	}
+	if len(segments) == 7 && segments[2] == "assignments" && segments[4] == "attachments" && segments[6] == "preview" {
+		return app.studentAssignmentAttachmentPreviewOperationLogSummary(request.Method, segments, actorID)
+	}
 	if len(segments) == 5 && segments[2] == "files" {
 		studentFileSegments := []string{"api", "files", segments[3], segments[4]}
 		return app.materialOperationLogSummary(request.Method, studentFileSegments, "student", actorID)
@@ -9484,6 +9649,14 @@ func (app *App) studentOperationLogSummaryForRequest(request *http.Request, segm
 }
 
 func (app *App) studentAssignmentAttachmentOperationLogSummary(method string, segments []string, actorID int64) (string, bool) {
+	return app.studentAssignmentAttachmentActionOperationLogSummary(method, segments, actorID, "下载")
+}
+
+func (app *App) studentAssignmentAttachmentPreviewOperationLogSummary(method string, segments []string, actorID int64) (string, bool) {
+	return app.studentAssignmentAttachmentActionOperationLogSummary(method, segments, actorID, "预览")
+}
+
+func (app *App) studentAssignmentAttachmentActionOperationLogSummary(method string, segments []string, actorID int64, action string) (string, bool) {
 	if method != http.MethodGet {
 		return "", false
 	}
@@ -9507,7 +9680,7 @@ func (app *App) studentAssignmentAttachmentOperationLogSummary(method string, se
 	if err != nil {
 		return "", false
 	}
-	return "学生下载作业附件：" + auditAssignmentLabel(assignment.Title) + "/" + auditEntryName(entry), true
+	return "学生" + action + "作业附件：" + auditAssignmentLabel(assignment.Title) + "/" + auditEntryName(entry), true
 }
 
 func (app *App) studentAssignmentSubmissionOperationLogSummary(method string, segments []string, actorID int64) (string, bool) {
@@ -9526,6 +9699,17 @@ func (app *App) studentAssignmentSubmissionOperationLogSummary(method string, se
 	assignmentLabel := auditAssignmentLabel(assignment.Title)
 	if len(segments) == 5 && segments[4] == "submission" && method == http.MethodPost {
 		return "学生提交作业：" + assignmentLabel, true
+	}
+	if len(segments) == 8 && segments[4] == "submission" && segments[5] == "files" && segments[7] == "preview" && method == http.MethodGet {
+		fileID, ok := positivePathID(segments, 6)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findStudentSubmissionFileByID(assignmentID, *student, fileID)
+		if err != nil {
+			return "", false
+		}
+		return "学生预览本人提交文件：" + assignmentLabel + "/" + auditEntryName(entry), true
 	}
 	if len(segments) == 8 && segments[4] == "submission" && segments[5] == "files" && segments[7] == "download" && method == http.MethodGet {
 		fileID, ok := positivePathID(segments, 6)
@@ -9598,6 +9782,36 @@ func (app *App) assignmentOperationLogSummaryForRequest(request *http.Request, s
 			return "", false
 		}
 		return "老师下载学生提交文件：" + assignmentLabel + "/" + studentName + "/" + auditEntryName(entry), true
+	}
+	if len(segments) == 6 && segments[3] == "attachments" && segments[5] == "preview" && request.Method == http.MethodGet {
+		fileID, ok := positivePathID(segments, 4)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findAssignmentAttachmentByID(assignmentID, *classID, fileID)
+		if err != nil {
+			return "", false
+		}
+		return "老师预览作业附件：" + assignmentLabel + "/" + auditEntryName(entry), true
+	}
+	if len(segments) == 7 && segments[3] == "submissions" && segments[4] == "files" && segments[6] == "preview" && request.Method == http.MethodGet {
+		fileID, ok := positivePathID(segments, 5)
+		if !ok {
+			return "", false
+		}
+		entry, err := app.findAssignmentSubmissionFileByID(assignmentID, *classID, fileID)
+		if err != nil {
+			return "", false
+		}
+		submissionID, ok := submissionIDFromEntryPath(entry)
+		if !ok {
+			return "", false
+		}
+		studentName, ok := app.assignmentSubmissionStudentName(assignmentID, *classID, submissionID)
+		if !ok {
+			return "", false
+		}
+		return "老师预览学生提交文件：" + assignmentLabel + "/" + studentName + "/" + auditEntryName(entry), true
 	}
 	return "", false
 }
@@ -10759,7 +10973,7 @@ func (app *App) createFolder(space string, classID *int64, parentPath, name stri
 	if err != nil {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
-	cleanName, err := sanitizeName(name)
+	cleanName, err := sanitizeStorageName(name)
 	if err != nil {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
@@ -10799,7 +11013,7 @@ func (app *App) createFile(space string, classID *int64, parentPath, name string
 	if err != nil {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
-	cleanName, err := sanitizeName(name)
+	cleanName, err := sanitizeStorageName(name)
 	if err != nil {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
@@ -10848,7 +11062,7 @@ func (app *App) createFileWithConflict(space string, classID *int64, parentPath,
 	if err != nil {
 		return nil, "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
-	cleanName, err := sanitizeName(name)
+	cleanName, err := sanitizeStorageName(name)
 	if err != nil {
 		return nil, "", domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
@@ -10999,7 +11213,7 @@ func normalizeUploadRelativePath(relativePath string) ([]string, error) {
 		if part == "" || part == "." || part == ".." {
 			return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: "relativePaths 非法"}
 		}
-		cleanName, err := sanitizeName(part)
+		cleanName, err := sanitizeStorageName(part)
 		if err != nil {
 			return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 		}
@@ -11247,7 +11461,7 @@ func (app *App) renameEntry(entryID int64, newName string) (*fileEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	cleanName, err := sanitizeName(newName)
+	cleanName, err := sanitizeStorageName(newName)
 	if err != nil {
 		return nil, domainError{Status: http.StatusUnprocessableEntity, Code: "invalid_request", Message: err.Error()}
 	}
@@ -11268,12 +11482,52 @@ func (app *App) renameEntry(entryID int64, newName string) (*fileEntry, error) {
 	if err := os.MkdirAll(filepath.Dir(newAbsolute), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.Rename(oldAbsolute, newAbsolute); err != nil {
-		return nil, err
+	// 磁盘状态与数据库状态对账后再改名，兼容历史数据：
+	// 1) 源目录缺失且目标已存在（非空）→ 旧版本“磁盘已改名、数据库未更新”的残留，
+	//    直接采用磁盘现状，跳过物理改名；
+	// 2) 源目录缺失且目标也缺失 → 历史数据只有记录没有目录，补建目标目录；
+	// 3) 源目录缺失且目标是文件 → 属于数据冲突，交给下方 rename 流程报错。
+	sourceExists := true
+	if _, statErr := os.Lstat(oldAbsolute); statErr != nil {
+		if !os.IsNotExist(statErr) {
+			return nil, statErr
+		}
+		sourceExists = false
+	}
+	if !sourceExists {
+		destInfo, destErr := os.Lstat(newAbsolute)
+		switch {
+		case destErr == nil && destInfo.IsDir():
+			log.Printf("rename entry %d: source dir missing but destination exists, adopting disk state", entry.ID)
+		case destErr == nil:
+			// 目标是文件，磁盘状态冲突，拒绝改名避免数据错乱
+			log.Printf("rename entry %d: destination occupied by a file (%s)", entry.ID, newAbsolute)
+			return nil, domainError{Status: http.StatusConflict, Code: "rename_blocked", Message: "目标位置存在同名文件，请先处理后再重试"}
+		case os.IsNotExist(destErr):
+			if mkdirErr := os.MkdirAll(newAbsolute, 0o755); mkdirErr != nil {
+				return nil, mkdirErr
+			}
+		default:
+			return nil, destErr
+		}
+	} else if err := renameWithRetryFunc(oldAbsolute, newAbsolute); err != nil {
+		// 直接改名失败（多为杀毒/同步盘/资源管理器占用目录）。
+		// 保留真实原因到服务端日志，并尝试复制通道：复制到新名字 + 清理旧目录，
+		// 保证用户的重命名诉求仍然达成（大目录会稍慢）。
+		log.Printf("rename entry %d (%s -> %s) direct rename failed: %v, falling back to copy", entry.ID, entry.ItemPath, newPath, err)
+		if fallbackErr := fallbackRenameDisk(oldAbsolute, newAbsolute, entry.Kind == "dir"); fallbackErr != nil {
+			log.Printf("rename entry %d (%s -> %s) copy fallback failed: %v", entry.ID, entry.ItemPath, newPath, fallbackErr)
+			return nil, domainError{Status: http.StatusConflict, Code: "rename_blocked", Message: "文件夹正被其他程序占用，请关闭正在访问它的程序（资源管理器、杀毒软件、云同步等）后重试"}
+		}
 	}
 	newDiskPath := path.Join(relativeRoot, strings.TrimPrefix(newPath, "/"))
+	rollbackDisk := func() {
+		_ = renameWithRetry(newAbsolute, oldAbsolute)
+	}
 	if entry.Kind == "dir" {
 		if err := app.renameDescendants(entry, newPath, newDiskPath); err != nil {
+			// 磁盘上已完成重命名，回滚以保持磁盘与数据库一致
+			rollbackDisk()
 			return nil, err
 		}
 	}
@@ -11283,9 +11537,128 @@ func (app *App) renameEntry(entryID int64, newName string) (*fileEntry, error) {
 	entry.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	_, err = app.db.Exec(`update file_entries set name = ?, item_path = ?, disk_path = ?, updated_at = ? where id = ?`, entry.Name, entry.ItemPath, entry.DiskPath, entry.UpdatedAt, entry.ID)
 	if err != nil {
+		rollbackDisk()
 		return nil, err
 	}
 	return entry, nil
+}
+
+// renameWithRetryFunc 是 renameEntry 调用的磁盘改名入口，测试可临时替换以模拟
+// Windows 上目录被占用（Access is denied）的场景。
+var renameWithRetryFunc = renameWithRetry
+
+// renameWithRetry 在 Windows 上重试被短暂占用的目录改名：杀毒软件、文件索引、
+// 云同步等程序可能瞬间锁住目录导致 Access denied，稍等重试即可成功；
+// 目标位置存在遗留空目录时（上次失败残留），Windows 拒绝覆盖，先清掉再试。
+func renameWithRetry(oldPath, newPath string) error {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			if info, statErr := os.Lstat(newPath); statErr == nil && info.IsDir() {
+				entries, readErr := os.ReadDir(newPath)
+				if readErr == nil && len(entries) == 0 {
+					_ = os.Remove(newPath)
+				}
+			}
+			time.Sleep(time.Duration(attempt) * 80 * time.Millisecond)
+		}
+		lastErr = os.Rename(oldPath, newPath)
+		if lastErr == nil {
+			return nil
+		}
+		if !isRenameRetryableError(lastErr) {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
+func isRenameRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if os.IsNotExist(err) {
+		return false
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	// Windows 上占用/拒绝访问表现为 ERROR_ACCESS_DENIED(5)、ERROR_SHARING_VIOLATION(32)，
+	// 消息里通常包含 access is denied / being used by another process 等字样。
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "access is denied") ||
+		strings.Contains(message, "being used by another process") ||
+		strings.Contains(message, "sharing violation") ||
+		strings.Contains(message, "the process cannot access the file")
+}
+
+func escapeLikePattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
+}
+
+// fallbackRenameDisk 是直接改名失败（目录被外部程序占用）时的复制通道：
+// 把源内容完整复制到目标位置，再尽力清理旧目录。读取文件通常不受目录句柄占用
+// 影响，因此即便 rename 被拒，复制也能成功，保证用户的重命名诉求达成。
+// 旧目录清理失败时只记日志（源文件此时已有完整副本，数据不会丢失）。
+func fallbackRenameDisk(oldPath, newPath string, isDir bool) error {
+	if !isDir {
+		if err := copyFileBytes(oldPath, newPath); err != nil {
+			return err
+		}
+		if removeErr := removeFileTree(oldPath); removeErr != nil {
+			log.Printf("fallback rename: failed to remove old file %s: %v", oldPath, removeErr)
+		}
+		return nil
+	}
+	err := filepath.WalkDir(oldPath, func(current string, dirEntry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(oldPath, current)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(newPath, relative)
+		if dirEntry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := dirEntry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil // 跳过符号链接等非常规条目
+		}
+		return copyFileBytes(current, target)
+	})
+	if err != nil {
+		return err
+	}
+	if removeErr := removeFileTree(oldPath); removeErr != nil {
+		log.Printf("fallback rename: failed to remove old directory %s: %v", oldPath, removeErr)
+	}
+	return nil
+}
+
+func copyFileBytes(source, target string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		return err
+	}
+	return output.Close()
 }
 
 func (app *App) renameDescendants(entry *fileEntry, newPath, newDiskPath string) error {
@@ -11293,20 +11666,48 @@ func (app *App) renameDescendants(entry *fileEntry, newPath, newDiskPath string)
 	newPrefix := newPath + "/"
 	oldDiskPrefix := entry.DiskPath + "/"
 	newDiskPrefix := newDiskPath + "/"
-	rows, err := app.db.Query(`select id, item_path, disk_path from file_entries where item_path like ? and space = ? and ifnull(class_id, 0) = ?`, oldPrefix+"%", entry.Space, classIDKey(entry.ClassID))
+	// 目录名可能含 %、_、\ 等 LIKE 通配符，转义后匹配才精确，避免误改兄弟目录
+	escapedPattern := escapeLikePattern(oldPrefix) + "%"
+	rows, err := app.db.Query(`select id, item_path, disk_path from file_entries where item_path like ? escape '\' and space = ? and ifnull(class_id, 0) = ?`, escapedPattern, entry.Space, classIDKey(entry.ClassID))
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	// 先完整收集再统一更新：不能在 rows 游标还打开时写库，
+	// 否则会与其他连接产生 SQLITE_BUSY 导致 500。
+	type descendantRow struct {
+		id       int64
+		itemPath string
+		diskPath string
+	}
+	var descendants []descendantRow
 	for rows.Next() {
-		var id int64
-		var itemPath string
-		var diskPath string
-		if err := rows.Scan(&id, &itemPath, &diskPath); err != nil {
+		var item descendantRow
+		if err := rows.Scan(&item.id, &item.itemPath, &item.diskPath); err != nil {
+			rows.Close()
 			return err
 		}
-		updatedPath := strings.Replace(itemPath, oldPrefix, newPrefix, 1)
-		updatedDisk := strings.Replace(diskPath, oldDiskPrefix, newDiskPrefix, 1)
+		descendants = append(descendants, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(descendants) == 0 {
+		return nil
+	}
+	// 批量更新放在单个事务里：缩短写锁窗口，且中途失败可整体回滚
+	tx, err := app.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	updatedAt := time.Now().UTC().Format(time.RFC3339)
+	for _, item := range descendants {
+		updatedPath := strings.Replace(item.itemPath, oldPrefix, newPrefix, 1)
+		updatedDisk := strings.Replace(item.diskPath, oldDiskPrefix, newDiskPrefix, 1)
 		parent := path.Dir(updatedPath)
 		if parent == "." {
 			parent = "/"
@@ -11314,11 +11715,11 @@ func (app *App) renameDescendants(entry *fileEntry, newPath, newDiskPath string)
 		if !strings.HasPrefix(parent, "/") {
 			parent = "/" + parent
 		}
-		if _, err := app.db.Exec(`update file_entries set parent_path = ?, item_path = ?, disk_path = ?, updated_at = ? where id = ?`, parent, updatedPath, updatedDisk, time.Now().UTC().Format(time.RFC3339), id); err != nil {
+		if _, err := tx.Exec(`update file_entries set parent_path = ?, item_path = ?, disk_path = ?, updated_at = ? where id = ?`, parent, updatedPath, updatedDisk, updatedAt, item.id); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return tx.Commit()
 }
 
 func (app *App) deleteEntry(entryID int64) error {

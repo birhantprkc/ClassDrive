@@ -166,13 +166,19 @@ ClassDrive 使用 SQLite 数据库，配置通过 DSN 字符串指定。
 ### 4.1 当前配置
 
 ```go
-dsn := filepath.Join(dbDir, "classdrive.db") + 
-       "?_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL"
+dsn := filepath.Join(dbDir, "classdrive.db") +
+       "?_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+// journal_mode 是文件级持久设置，启动时单独执行一次：
+db.Exec(`pragma journal_mode = wal`)
 ```
+
+> **注意**：modernc.org/sqlite 驱动只识别 `_pragma=` 形式的 DSN 参数。
+> `_busy_timeout=...`、`_journal_mode=...` 这类写法会被静默忽略（曾导致
+> 文件夹重命名等并发写操作报 SQLITE_BUSY / 服务器内部错误）。
 
 ### 4.2 参数说明
 
-#### _busy_timeout
+#### busy_timeout
 
 **说明**: 写锁等待超时时间（毫秒）
 
@@ -184,7 +190,7 @@ dsn := filepath.Join(dbDir, "classdrive.db") +
 - 高并发场景可适当提高到 10000
 - 单用户场景可降低到 3000
 
-#### _journal_mode
+#### journal_mode
 
 **说明**: 日志模式
 
@@ -220,13 +226,16 @@ dsn := filepath.Join(dbDir, "classdrive.db") +
 
 **总大小限制**: 无硬限制（受磁盘空间约束）
 
-**允许的文件类型**:
-- 常用文件: `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.pdf`, `.txt`, `.zip`, `.rar`, `.7z`
-- 图片文件: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.svg`, `.webp`
-- 视频文件: `.mp4`, `.avi`, `.mov`, `.wmv`, `.flv`, `.mkv`
-- 音频文件: `.mp3`, `.wav`, `.ogg`, `.m4a`, `.flac`
+**允许的文件类型**（按作业的“提交文件类型”分类）:
+- 常用文件: Office（`.doc/.docx/.xls/.xlsx/.ppt/.pptx/.rtf/.odt`）、PDF、TXT、HTML（`.html/.htm`）、Markdown（`.md/.markdown`）、CSV、JSON、XML、图片（`.jpg/.jpeg/.png/.gif/.bmp/.webp/.svg/.tif/.tiff/.avif`）、音频（`.mp3/.wav/.m4a/.ogg/.flac`）、视频（`.mp4/.webm/.mov/.avi/.mkv/.wmv`）、压缩包（`.zip/.rar/.7z/.tar/.gz/.tgz`）、WPS（`.wps/.et/.dps`）
+- 图片文件: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.svg`, `.webp`, `.tif`, `.tiff`, `.avif`
+- Word 文档: `.doc`, `.docx`, `.rtf`, `.odt`
+- PDF 文件: `.pdf`
+- 压缩包: `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.tgz`
 
-**代码位置**: `internal/server/server.go` 第 101-134 行
+HTML 提交支持在沙箱环境中在线预览效果，Markdown 支持在线渲染预览。
+
+**代码位置**: `internal/server/server.go` 中 `studentSubmissionAllowedExtensions` 与 `studentSubmissionTypeExtensions`
 
 **修改方式**:
 修改 `studentSubmissionMaxFileSize` 常量后重新编译：

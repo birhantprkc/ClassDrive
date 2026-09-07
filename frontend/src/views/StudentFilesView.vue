@@ -334,6 +334,7 @@
       :loading="previewLoading"
       :error-text="previewErrorText"
       :text-content="previewTextContent"
+      :markdown-content="previewMarkdownContent"
       :can-edit="false"
       :has-previous="previewHasPrevious"
       :has-next="previewHasNext"
@@ -352,6 +353,7 @@ import FilePreviewDialog from "@/components/FilePreviewDialog.vue";
 import PaginationControls from "@/components/PaginationControls.vue";
 import StatePanel from "@/components/StatePanel.vue";
 import { getFilePreviewKind } from "@/utils/file-preview";
+import { renderMarkdownPreview } from "@/utils/markdown-preview";
 import { uiCopy } from "@/utils/ui-copy";
 
 type StudentFileSpace = "public" | "class";
@@ -377,6 +379,7 @@ const loading = ref(false);
 const errorText = ref("");
 const previewItem = ref<FileItem | null>(null);
 const previewTextContent = ref("");
+const previewMarkdownContent = ref("");
 const previewLoading = ref(false);
 const previewErrorText = ref("");
 const previewTextCache = ref(new Map<number, string>());
@@ -573,6 +576,7 @@ async function openCardItem(item: FileItem) {
 function closePreview() {
   previewItem.value = null;
   previewTextContent.value = "";
+  previewMarkdownContent.value = "";
   previewLoading.value = false;
   previewErrorText.value = "";
 }
@@ -672,13 +676,18 @@ async function preview(item: FileItem) {
   previewItem.value = item;
   previewErrorText.value = "";
   previewTextContent.value = "";
-  if (kind !== "text") {
+  previewMarkdownContent.value = "";
+  if (kind !== "text" && kind !== "markdown") {
     previewLoading.value = false;
     return;
   }
   const cached = previewTextCache.value.get(item.id);
   if (cached !== undefined) {
-    previewTextContent.value = cached;
+    if (kind === "markdown") {
+      previewMarkdownContent.value = renderMarkdownPreview(cached);
+    } else {
+      previewTextContent.value = cached;
+    }
     previewLoading.value = false;
     return;
   }
@@ -690,7 +699,11 @@ async function preview(item: FileItem) {
     }
     const text = await response.text();
     previewTextCache.value.set(item.id, text);
-    previewTextContent.value = text;
+    if (kind === "markdown") {
+      previewMarkdownContent.value = renderMarkdownPreview(text);
+    } else {
+      previewTextContent.value = text;
+    }
   } catch {
     previewErrorText.value = "预览加载失败，请下载后查看。";
   } finally {

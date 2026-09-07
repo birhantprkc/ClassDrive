@@ -25,9 +25,15 @@ async function loginAsTeacher(page: Page) {
 
 async function teacherRequest<T>(page: Page, url: string, init?: RequestInit): Promise<T> {
   return page.evaluate(async ({ requestUrl, requestInit }) => {
+    const csrfToken = document.cookie.match(/classdrive_csrf=([^;]+)/)?.[1] ?? "";
+    const headers = new Headers(requestInit?.headers);
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
     const response = await fetch(requestUrl, {
       credentials: "same-origin",
       ...requestInit,
+      headers,
     });
     if (!response.ok) {
       throw new Error(`${requestUrl} -> ${response.status}: ${await response.text()}`);

@@ -1822,7 +1822,7 @@ func TestStudentAssignmentsListShowsPublishedOnly(t *testing.T) {
 	if payload.Assignments[0].Submission != nil {
 		t.Fatalf("expected empty submission summary before submit, got %#v", payload.Assignments[0].Submission)
 	}
-	if payload.SubmissionConstraints.AllowedTypesLabel != "PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP" || payload.SubmissionConstraints.MaxFileSizeLabel != "100 MB" {
+	if payload.SubmissionConstraints.AllowedTypesLabel != "PDF、Word、Excel、PPT、TXT、HTML、Markdown、CSV、JSON、图片、音视频、压缩包" || payload.SubmissionConstraints.MaxFileSizeLabel != "100 MB" {
 		t.Fatalf("expected submission constraints in list payload, got %#v", payload.SubmissionConstraints)
 	}
 }
@@ -3882,7 +3882,7 @@ func TestStudentSubmissionValidationRejectsUnsupportedTypeAndOversize(t *testing
 
 	var invalidPayload apiErrorResponse
 	decodeJSON(t, invalidRecorder.Body, &invalidPayload)
-	if invalidPayload.Error.Message != "仅支持 PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP 文件" {
+	if invalidPayload.Error.Message != "仅支持 PDF、Word、Excel、PPT、TXT、HTML、Markdown、CSV、JSON、图片、音视频、压缩包 文件" {
 		t.Fatalf("unexpected invalid type error %#v", invalidPayload.Error)
 	}
 	if countSubmissionsByAssignmentAndStudent(t, app.db, assignment.ID, currentStudent.ID) != 0 {

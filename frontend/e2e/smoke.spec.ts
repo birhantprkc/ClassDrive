@@ -6,6 +6,8 @@ async function loginAs(page: Page, username: string, password: string) {
   await page.getByTestId("teacher-login-password").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page).toHaveURL(/\/files\/library$/);
+  // 本套用例基于列表视图编写
+  await page.getByTestId("files-view-list").click();
 }
 
 async function loginAsTeacher(page: Page) {
@@ -58,9 +60,15 @@ async function expectFilesSearchAtWorkspaceEnd(page: Page, path: string) {
 
 async function teacherRequest<T>(page: Page, url: string, init?: RequestInit): Promise<T> {
   return page.evaluate(async ({ requestUrl, requestInit }) => {
+    const csrfToken = document.cookie.match(/classdrive_csrf=([^;]+)/)?.[1] ?? "";
+    const headers = new Headers(requestInit?.headers);
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
     const response = await fetch(requestUrl, {
       credentials: "same-origin",
       ...requestInit,
+      headers,
     });
     if (!response.ok) {
       throw new Error(`${requestUrl} -> ${response.status}: ${await response.text()}`);
@@ -86,10 +94,16 @@ async function uploadFileWithBrowserFetch(
     formData.append("files", new File([contents], name, { type: "text/plain" }));
     formData.append("relativePaths", "");
 
+    const csrfToken = document.cookie.match(/classdrive_csrf=([^;]+)/)?.[1] ?? "";
+    const headers: Record<string, string> = {};
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
     const response = await fetch("/api/files/upload", {
       method: "POST",
       body: formData,
       credentials: "same-origin",
+      headers,
     });
     if (!response.ok) {
       throw new Error(await response.text());
@@ -136,10 +150,16 @@ async function uploadDirectoryWithBrowserFetch(
       formData.append("relativePaths", entry.relativePath);
     }
 
+    const csrfToken = document.cookie.match(/classdrive_csrf=([^;]+)/)?.[1] ?? "";
+    const headers: Record<string, string> = {};
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
     const response = await fetch("/api/files/upload", {
       method: "POST",
       body: formData,
       credentials: "same-origin",
+      headers,
     });
     if (!response.ok) {
       throw new Error(await response.text());
@@ -339,6 +359,7 @@ test("老师文件工作台主路径可用", async ({ page }) => {
 
   await page.getByRole("link", { name: "公共资料" }).click();
   await expect(page).toHaveURL(/\/files\/public$/);
+  await page.getByTestId("files-view-list").click();
 
   const publicFolderRow = page.locator("tr", { hasText: "课程资料" });
   await expect(publicFolderRow).toBeVisible();
@@ -407,7 +428,8 @@ test("老师可在线编辑文本文件并保存到现有预览链路", async ({
   await expect(fileRow).toBeVisible();
   await fileRow.getByRole("button", { name: "预览" }).click();
   await expect(page.getByTestId("file-preview-dialog")).toBeVisible();
-  await expect(page.getByTestId("file-preview-text")).toContainText(updatedContent);
+  await expect(page.getByTestId("file-preview-markdown")).toContainText("修订稿");
+  await expect(page.getByTestId("file-preview-markdown")).toContainText("第二行");
   await page.getByTestId("file-preview-close").click();
 });
 
@@ -417,7 +439,7 @@ test("老师账号与系统设置具备 owner staff 权限边界", async ({ page
   await page.goto("/settings/system");
   await expect(page).toHaveURL(/\/settings\/system$/);
   await expect(page.getByTestId("system-access-url")).toBeVisible();
-  await expect(page.getByTestId("system-port-note")).toContainText("重启后生效");
+  await expect(page.getByTestId("system-port-note")).toContainText("保存后立即生效");
 
   const suffix = Date.now().toString();
   const username = `staff${suffix.slice(-6)}`;
@@ -555,6 +577,51 @@ test("老师可以上传、重命名并下载文件", async ({ page }) => {
   await expect(download.suggestedFilename()).toContain("课堂记录-v2.txt");
 });
 
+test("老师可以重命名含子项的文件夹", async ({ page }) => {
+  await loginAsTeacher(page);
+
+  // 新建文件夹并上传一个子文件
+  await page.getByRole("button", { name: "新建文件夹", exact: true }).click();
+  await page.getByTestId("create-folder-input").fill("待重命名文件夹");
+  await page.getByTestId("create-folder-confirm").click();
+  await expect(page.getByText("文件夹已创建")).toBeVisible();
+
+  const folderRow = page.locator("tr", { hasText: "待重命名文件夹" });
+  await expect(folderRow).toBeVisible();
+  await folderRow.getByRole("button", { name: "待重命名文件夹" }).click();
+  await expect(page.getByTestId("files-context-bar")).toContainText("待重命名文件夹");
+
+  await page.getByTestId("upload-input").setInputFiles({
+    name: "子文件.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("folder child body"),
+  });
+  await expect(page.getByText("文件上传成功")).toBeVisible();
+  await expect(page.locator("tr", { hasText: "子文件.txt" })).toBeVisible();
+
+  // 返回上一级并重命名文件夹（回归：曾因 SQLITE_BUSY 报 500）
+  await page.getByRole("button", { name: "返回上一级文件夹" }).click();
+  await expect(page.getByTestId("files-context-bar")).not.toContainText("待重命名文件夹");
+  const parentFolderRow = page.locator("tr", { hasText: "待重命名文件夹" });
+  await expect(parentFolderRow).toBeVisible();
+  await clickOverflowAction(parentFolderRow, "重命名");
+  await page.getByTestId("rename-entry-input").fill("已重命名文件夹");
+  await page.getByTestId("rename-entry-confirm").click();
+  await expect(page.getByTestId("toast-stack").getByText("已重命名")).toBeVisible();
+
+  // 进入重命名后的文件夹，子文件应完好且可下载
+  const renamedFolderRow = page.locator("tr", { hasText: "已重命名文件夹" });
+  await expect(renamedFolderRow).toBeVisible();
+  await renamedFolderRow.getByRole("button", { name: "已重命名文件夹" }).click();
+  await expect(page.getByTestId("files-context-bar")).toContainText("已重命名文件夹");
+  const childRow = page.locator("tr", { hasText: "子文件.txt" });
+  await expect(childRow).toBeVisible();
+  const childDownload = page.waitForEvent("download");
+  await childRow.getByRole("link", { name: "下载" }).click();
+  const childFile = await childDownload;
+  await expect(childFile.suggestedFilename()).toContain("子文件.txt");
+});
+
 test("老师可按冲突策略自动重命名同名上传", async ({ page }) => {
   await loginAsTeacher(page);
 
@@ -607,7 +674,7 @@ test("老师上传目录后可看到保留的目录结构", async ({ page }) => 
     ],
   });
 
-  await page.goto("/files/library");
+  await page.goto("/files/library?view=list");
   const rootFolderRow = page.locator("tr", { hasText: rootFolder });
   await expect(rootFolderRow).toBeVisible();
   await rootFolderRow.getByRole("button", { name: rootFolder }).click();
@@ -754,6 +821,7 @@ test("老师可以复制到指定班级子目录", async ({ page }) => {
 
   await page.getByRole("link", { name: "班级资料" }).click();
   await expect(page).toHaveURL(/\/files\/classes\/1$/);
+  await page.getByTestId("files-view-list").click();
 
   const targetFolderRow = page.locator("tr", { hasText: "课件归档" });
   await expect(targetFolderRow).toBeVisible();
@@ -804,6 +872,7 @@ test("老师可批量移动文件并下载目录压缩包", async ({ page }) => 
   await expect(page.locator("tr", { hasText: folderName })).toHaveCount(0);
 
   await page.getByRole("link", { name: "公共资料" }).click();
+  await page.getByTestId("files-view-list").click();
   const targetFolderRow = page.locator("tr", { hasText: targetFolderName });
   await expect(targetFolderRow).toBeVisible();
   await targetFolderRow.getByRole("button", { name: targetFolderName }).click();
@@ -858,7 +927,6 @@ test("老师可搜索文件、切换排序并切到网格视图，并保留当�
 
   await page.getByTestId("files-view-grid").click();
   await expect(page).toHaveURL(/sort=size-desc/);
-  await expect(page).toHaveURL(/view=grid/);
   await expect(page.getByTestId("files-grid")).toBeVisible();
   await expect(page.getByTestId("files-grid")).toContainText(largeFileName);
 
@@ -870,7 +938,6 @@ test("老师可搜索文件、切换排序并切到网格视图，并保留当�
   await expect(page).toHaveURL(/page=2/);
   await expect(page).toHaveURL(/pageSize=1/);
   await expect(page).toHaveURL(/sort=size-desc/);
-  await expect(page).toHaveURL(/view=grid/);
 
   await page.reload();
   await expect(page.getByTestId("files-grid")).toBeVisible();
@@ -930,7 +997,7 @@ test("老师可在班级学生抽屉使用服务端搜索分页", async ({ page 
   await page.getByTestId("student-page-next").click();
 
   await expect(page.getByTestId("student-pagination-summary")).toContainText("第 2 / 2 页");
-  await expect(page.getByTestId("class-students-drawer").locator('tr[data-testid^="student-row-"]')).toContainText(matchingStudents[30].displayName);
+  await expect(page.getByTestId("class-students-drawer")).toContainText(matchingStudents[30].displayName);
 });
 
 test("老师可在作业页使用服务端搜索分页，并在刷新后保留状态", async ({ page }) => {
@@ -947,25 +1014,21 @@ test("老师可在作业页使用服务端搜索分页，并在刷新后保留�
     }),
   });
 
-  const matchingAssignments = [
-    {
-      title: `筛选作业-A-${suffix.slice(-2)}`,
+  const matchingAssignments = Array.from({ length: 31 }, (_, index) => {
+    const order = String(index + 1).padStart(2, "0");
+    return {
+      title: `筛选作业-${order}-${suffix.slice(-2)}`,
       description: "用于作业分页状态回归。",
-      dueAt: "2030-05-02T12:00:00.000Z",
-    },
-    {
-      title: `筛选作业-B-${suffix.slice(-2)}`,
-      description: "用于作业分页状态回归。",
-      dueAt: "2030-05-03T12:00:00.000Z",
-    },
-  ];
+      dueAt: new Date(Date.parse("2030-05-01T00:00:00.000Z") + index * 24 * 60 * 60 * 1000).toISOString(),
+    };
+  });
 
   for (const assignment of [
     ...matchingAssignments,
     {
       title: `无关作业-${suffix.slice(-2)}`,
       description: "不会命中搜索。",
-      dueAt: "2030-05-01T12:00:00.000Z",
+      dueAt: "2030-05-01T00:00:00.000Z",
     },
   ]) {
     await teacherRequest(page, "/api/assignments", {
@@ -986,23 +1049,21 @@ test("老师可在作业页使用服务端搜索分页，并在刷新后保留�
   await page.goto(`/assignments/classes/${createdClass.id}`);
   await page.getByTestId("assignment-search-input").fill("筛选作业");
   await page.getByTestId("assignment-sort-due").click();
-  await page.getByTestId("assignment-page-size-select").selectOption("1");
   await expect(page.getByTestId("assignment-pagination-summary")).toContainText("第 1 / 2 页");
   await page.getByTestId("assignment-page-next").click();
 
   await expect(page).toHaveURL(/q=%E7%AD%9B%E9%80%89%E4%BD%9C%E4%B8%9A/);
   await expect(page).toHaveURL(/sort=dueAt-asc/);
   await expect(page).toHaveURL(/page=2/);
-  await expect(page).toHaveURL(/pageSize=1/);
   await expect(page.getByTestId("assignment-pagination-summary")).toContainText("第 2 / 2 页");
-  await expect(page.locator('[data-testid^="assignment-row-"]')).toContainText(matchingAssignments[1].title);
+  await expect(page.locator('[data-testid^="assignment-row-"]')).toContainText(matchingAssignments[30].title);
 
   await page.reload();
   await expect(page.getByTestId("assignment-search-input")).toHaveValue("筛选作业");
   await expect(page.getByTestId("assignment-sort-due")).toHaveClass(/is-active/);
-  await expect(page.getByTestId("assignment-page-size-select")).toHaveValue("1");
+  await expect(page.getByTestId("assignment-page-size-select")).toHaveValue("30");
   await expect(page.getByTestId("assignment-pagination-summary")).toContainText("第 2 / 2 页");
-  await expect(page.locator('[data-testid^="assignment-row-"]')).toContainText(matchingAssignments[1].title);
+  await expect(page.locator('[data-testid^="assignment-row-"]')).toContainText(matchingAssignments[30].title);
 });
 
 test("老师可以在班级管理页创建班级并生成注册码", async ({ page }) => {
@@ -1037,6 +1098,7 @@ test("老师可在班级资料新建目录上传并复制文件到公共资料",
 
   await page.getByRole("link", { name: "班级资料" }).click();
   await expect(page).toHaveURL(/\/files\/classes\/1$/);
+  await page.getByTestId("files-view-list").click();
 
   await page.getByRole("button", { name: "新建文件夹" }).click();
   await page.getByTestId("create-folder-input").fill(folderName);
@@ -1055,7 +1117,7 @@ test("老师可在班级资料新建目录上传并复制文件到公共资料",
     name: fileName,
     contents: "class space smoke upload",
   });
-  await page.goto(`/files/classes/1?path=/${encodeURIComponent(folderName)}`);
+  await page.goto(`/files/classes/1?path=/${encodeURIComponent(folderName)}&view=list`);
   await expect(page).toHaveURL(new RegExp(`path=/${encodeURIComponent(folderName)}`));
 
   const uploadedRow = page.locator("tr", { hasText: fileName });
@@ -1069,6 +1131,7 @@ test("老师可在班级资料新建目录上传并复制文件到公共资料",
 
   await page.getByRole("link", { name: "公共资料" }).click();
   await expect(page).toHaveURL(/\/files\/public$/);
+  await page.getByTestId("files-view-list").click();
   await expect(page.locator("tr", { hasText: fileName })).toBeVisible();
 });
 
@@ -1096,8 +1159,8 @@ test("老师创建班级后上传文件且注册码状态保持一致", async ({
   const classesResponse = await teacherRequest<{ classes: Array<{ id: number; name: string }> }>(page, "/api/classes");
   const createdClass = classesResponse.classes.find((item) => item.name === className);
   expect(createdClass).toBeDefined();
-  await page.goto(`/files/classes/${createdClass!.id}`);
-  await expect(page).toHaveURL(/\/files\/classes\/\d+$/);
+  await page.goto(`/files/classes/${createdClass!.id}?view=list`);
+  await expect(page).toHaveURL(/\/files\/classes\/\d+(\?.*)?$/);
 
   const classId = createdClass!.id;
   await uploadFileWithBrowserFetch(page, {
@@ -1107,7 +1170,7 @@ test("老师创建班级后上传文件且注册码状态保持一致", async ({
     name: fileName,
     contents: "class join code consistency",
   });
-  await page.goto(`/files/classes/${classId}`);
+  await page.goto(`/files/classes/${classId}?view=list`);
   await expect(page.locator("tr", { hasText: fileName })).toBeVisible();
 
   await page.getByRole("link", { name: "班级管理" }).click();
@@ -1307,6 +1370,7 @@ test("学生端左侧工作区可查看公共资料与班级资料", async ({ pa
 
   await page.getByTestId("student-nav-public-files").click();
   await expect(page).toHaveURL(/\/student\/files\/public$/);
+  await page.getByTestId("student-files-view-list").click();
   await expect(page.getByTestId("student-files-table")).toContainText(publicFileName);
   await page.locator("tr", { hasText: publicFileName }).getByRole("button", { name: "预览" }).click();
   await expect(page.getByTestId("file-preview-dialog")).toContainText(publicFileName);
@@ -1317,12 +1381,14 @@ test("学生端左侧工作区可查看公共资料与班级资料", async ({ pa
 
   await page.getByTestId("student-nav-class-files").click();
   await expect(page).toHaveURL(/\/student\/files\/class$/);
+  await page.getByTestId("student-files-view-list").click();
   await expect(page.getByTestId("student-files-table")).toContainText(classFileName);
   await page.locator("tr", { hasText: classFileName }).getByRole("button", { name: "预览" }).click();
   await expect(page.getByTestId("file-preview-dialog")).toContainText(classFileName);
   await expect(page.getByTestId("file-preview-text")).toContainText("班级资料正文");
   await page.getByTestId("file-preview-close").click();
-  await expect(page.getByText("只读资料")).toBeVisible();
+  await expect(page.getByTestId("upload-material-open")).toHaveCount(0);
+  await expect(page.getByTestId("create-file-button")).toHaveCount(0);
 });
 
 test("老师可在作业详情页编辑并删除作业", async ({ page }) => {

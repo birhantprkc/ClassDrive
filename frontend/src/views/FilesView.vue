@@ -668,6 +668,7 @@
       :loading="previewLoading"
       :error-text="previewErrorText"
       :text-content="previewTextContent"
+      :markdown-content="previewMarkdownContent"
       :can-edit="previewItem ? canEditFile(previewItem) : false"
       :has-previous="previewHasPrevious"
       :has-next="previewHasNext"
@@ -739,6 +740,7 @@ import { useRecentCopyTargetsStore, type RecentCopyTarget } from "@/stores/recen
 import { useToastStore } from "@/stores/toast";
 import { useUploadStore } from "@/stores/upload";
 import { canEditTextFile, getFilePreviewKind } from "@/utils/file-preview";
+import { renderMarkdownPreview } from "@/utils/markdown-preview";
 import { uiCopy, uploadSuccessMessage } from "@/utils/ui-copy";
 import { collectDroppedUploadItems } from "@/utils/upload-drop";
 import { filterRedundantDirectoryArchives } from "@/utils/upload-items";
@@ -824,6 +826,7 @@ const copyCreateFolderName = ref("");
 const copyDialogEntry = computed(() => targetDialogEntries.value[0] ?? null);
 const previewItem = ref<FileItem | null>(null);
 const previewTextContent = ref("");
+const previewMarkdownContent = ref("");
 const previewLoading = ref(false);
 const previewErrorText = ref("");
 const editorItem = ref<FileItem | null>(null);
@@ -2144,6 +2147,7 @@ async function openDirectory(item: FileItem) {
 function closePreview() {
   previewItem.value = null;
   previewTextContent.value = "";
+  previewMarkdownContent.value = "";
   previewErrorText.value = "";
   previewLoading.value = false;
 }
@@ -2303,16 +2307,22 @@ async function preview(item: FileItem) {
 
     previewItem.value = item;
     previewTextContent.value = "";
+    previewMarkdownContent.value = "";
     previewErrorText.value = "";
     previewLoading.value = false;
 
-    if (nextPreviewKind !== "text") {
+    if (nextPreviewKind !== "text" && nextPreviewKind !== "markdown") {
       return;
     }
 
     previewLoading.value = true;
     try {
-      previewTextContent.value = await fetchTextPreviewContent(item);
+      const content = await fetchTextPreviewContent(item);
+      if (nextPreviewKind === "markdown") {
+        previewMarkdownContent.value = renderMarkdownPreview(content);
+      } else {
+        previewTextContent.value = content;
+      }
     } catch {
       previewErrorText.value = uiCopy.previewLoadFailed;
     } finally {

@@ -141,6 +141,12 @@ function previewKindLabel(item: AssignmentAttachmentItem): string {
   if (kind === "pdf") {
     return "PDF";
   }
+  if (kind === "html") {
+    return "网页";
+  }
+  if (kind === "markdown") {
+    return "Markdown";
+  }
   if (kind === "text") {
     return "文本";
   }

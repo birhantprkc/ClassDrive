@@ -270,7 +270,7 @@ GET /api/share/:token/items?path=/子目录
 
 ### 4. 预览文件
 
-在浏览器中预览文件（支持图片、PDF、文本、音视频等）。
+在浏览器中预览文件（支持图片、PDF、文本、音视频、Markdown 等；HTML 网页在沙箱环境中渲染）。
 
 ```http
 GET /api/share/:token/files/:id/preview
@@ -279,6 +279,10 @@ GET /api/share/:token/files/:id/preview
 **认证**: 需要分享会话
 
 **响应**: 文件内容（Content-Type 根据文件类型设置）
+
+**安全**: HTML/SVG 等可执行内容的内联预览响应会附带
+`Content-Security-Policy: sandbox` 与 `X-Content-Type-Options: nosniff`，
+即使在新标签页直接打开也无法以同源身份运行脚本。
 
 ---
 

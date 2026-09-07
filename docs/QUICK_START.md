@@ -172,7 +172,7 @@ cp -r var/storage var/storage-backup-$(date +%Y%m%d)
 
 ### Q5: 支持哪些文件预览？
 **A**: 
-- **在线预览**: 图片、PDF、文本文件、Markdown
+- **在线预览**: 图片、PDF、音视频、文本文件、Markdown（在线渲染）、HTML 网页（沙箱环境预览效果）
 - **在线编辑**: 文本文件 (.txt, .md, .js, .py, .go 等)
 - **其他文件**: 下载后查看
 

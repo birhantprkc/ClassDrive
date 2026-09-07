@@ -53,9 +53,15 @@ async function loginAsTeacher(page: Page) {
 
 async function teacherRequest<T>(page: Page, url: string, init?: RequestInit): Promise<T> {
   return page.evaluate(async ({ requestUrl, requestInit }) => {
+    const csrfToken = document.cookie.match(/classdrive_csrf=([^;]+)/)?.[1] ?? "";
+    const headers = new Headers(requestInit?.headers);
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
     const response = await fetch(requestUrl, {
       credentials: "same-origin",
       ...requestInit,
+      headers,
     });
     if (!response.ok) {
       throw new Error(`${requestUrl} -> ${response.status}: ${await response.text()}`);
@@ -172,7 +178,7 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
     password,
   });
   await expect(page.getByText(futureTitle)).toBeVisible();
-  await expect(page.getByText("支持 PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP，单个文件不超过 100 MB")).toBeVisible();
+  await expect(page.getByTestId(`student-assignment-link-${fixture.futureAssignmentId}`)).toBeVisible();
 
   await page.getByTestId("student-logout-submit").click();
   await expect(page).toHaveURL(/\/student\/login$/);
@@ -181,13 +187,16 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
     studentNo,
     password,
   });
-  await expect(page.getByText("支持 PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP，单个文件不超过 100 MB")).toBeVisible();
+  await expect(page.getByTestId(`student-assignment-link-${fixture.futureAssignmentId}`)).toBeVisible();
 
   await page.getByTestId(`student-assignment-link-${fixture.futureAssignmentId}`).click();
   await expect(page).toHaveURL(new RegExp(`/student/assignments/${fixture.futureAssignmentId}$`));
+  await expect(page.getByText("PDF、Word、Excel、PPT、TXT、HTML、Markdown、CSV、JSON、图片、音视频、压缩包")).toBeVisible();
 
   const firstChooserPromise = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "选择文件", exact: true }).click();
+  await page.getByTestId("student-submission-submit").click();
+  await expect(page.getByTestId("student-submission-dialog")).toBeVisible();
+  await page.getByTestId("student-submission-file-open").click();
   const firstChooser = await firstChooserPromise;
   await firstChooser.setFiles({
     name: "first.txt",
@@ -195,13 +204,14 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
     buffer: Buffer.from("student first submission"),
   });
   await expect(page.getByTestId("student-submission-selection")).toContainText("first.txt");
-  await page.getByTestId("student-submission-submit").click();
-  await expect(page.getByText("first.txt")).toBeVisible();
-  await expect(page.getByRole("button", { name: "重新提交" })).toBeVisible();
+  await page.getByTestId("student-submission-dialog-submit").click();
+  await page.getByTestId("student-submission-confirm-confirm").click();
+  await expect(page.getByTestId("student-assignment-current-submission")).toContainText("first.txt");
+  await expect(page.getByTestId("student-submission-submit")).toContainText("继续添加");
 
-  await page.getByRole("link", { name: "返回列表" }).click();
+  await page.goto("/student/assignments");
   await expect(page).toHaveURL(/\/student\/assignments$/);
-  await expect(page.locator(".classes-card", { hasText: futureTitle })).toContainText("已提交");
+  await expect(page.locator('[data-testid^="student-assignment-row-"]', { hasText: futureTitle })).toContainText("已提交");
 
   await page.getByTestId("student-logout-submit").click();
   await expect(page).toHaveURL(/\/student\/login$/);
@@ -214,7 +224,6 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
   await expect(page.getByTestId("assignment-submission-prev")).toBeVisible();
   await expect(page.getByTestId("assignment-submission-next")).toBeVisible();
   await expect(page.getByTestId("assignment-submission-review-mark-all")).toBeVisible();
-  await expect(page.getByTestId("assignment-submission-review-save-all")).toBeVisible();
   await expect(page.getByTestId("assignment-detail-overview")).toHaveCount(0);
   await expect(page.getByTestId("assignment-detail-status")).toBeVisible();
   const toolbarBox = await page.getByTestId("assignment-submission-toolbar").boundingBox();
@@ -237,10 +246,8 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
     const pendingBadge = element.querySelector<HTMLElement>('[data-testid^="assignment-submission-review-badge-"]');
     const openButton = element.querySelector<HTMLElement>('[data-testid^="assignment-submission-open-"]');
     const markAllButton = element.querySelector<HTMLElement>('[data-testid="assignment-submission-review-mark-all"]');
-    const saveAllButton = element.querySelector<HTMLElement>('[data-testid="assignment-submission-review-save-all"]');
     const pendingBadgeStyle = pendingBadge ? window.getComputedStyle(pendingBadge) : null;
     const markAllButtonStyle = markAllButton ? window.getComputedStyle(markAllButton) : null;
-    const saveAllButtonStyle = saveAllButton ? window.getComputedStyle(saveAllButton) : null;
     return {
       toolbarBackground: toolbar ? window.getComputedStyle(toolbar).backgroundColor : "",
       toolbarElButtonCount: toolbar?.querySelectorAll(".el-button").length ?? 0,
@@ -255,7 +262,6 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
       openButtonClass: openButton?.className ?? "",
       openButtonBackground: openButton ? window.getComputedStyle(openButton).backgroundColor : "",
       markAllButtonBackgroundImage: markAllButtonStyle?.backgroundImage ?? "",
-      saveAllButtonBackgroundImage: saveAllButtonStyle?.backgroundImage ?? "",
     };
   });
   expect(detailSurface.toolbarBackground).not.toBe("rgb(255, 255, 255)");
@@ -274,10 +280,9 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
   expect(detailSurface.openButtonClass).not.toContain("el-button");
   expect(detailSurface.openButtonBackground).not.toBe("rgb(236, 245, 255)");
   expect(detailSurface.markAllButtonBackgroundImage).not.toBe("none");
-  expect(detailSurface.saveAllButtonBackgroundImage).not.toBe("none");
   await submissionRow.getByRole("button", { name: "查看/批改" }).click();
   await expect(page.getByTestId("assignment-submission-review-drawer")).toContainText(displayName);
-  await expect(page.getByTestId("assignment-submission-file-tree")).toContainText("first.txt");
+  await expect(page.getByTestId("assignment-submission-file-grid")).toContainText("first.txt");
   await expect(page.getByTestId("assignment-review-drawer-prev")).toBeVisible();
   await expect(page.getByTestId("assignment-review-drawer-next")).toBeVisible();
   const drawerBox = await page.getByTestId("assignment-submission-review-drawer").boundingBox();
@@ -308,30 +313,25 @@ test("学生首登激活、登录并提交作业，老师可查看当前提交",
   const darkDrawerSurface = await page.getByTestId("assignment-submission-review-drawer").evaluate((element) => {
     const body = element.querySelector<HTMLElement>(".el-drawer__body");
     const summary = element.querySelector<HTMLElement>('[data-testid="assignment-review-drawer-summary"]');
-    const fileBrowser = element.querySelector<HTMLElement>(".assignment-review-drawer__file-browser");
     const reviewForm = element.querySelector<HTMLElement>(".assignment-review-drawer__form");
     const filesPanel = element.querySelector<HTMLElement>(".assignment-review-drawer__files-panel");
-    const formPanel = element.querySelector<HTMLElement>(".assignment-review-drawer__form");
     const bodyStyle = body ? window.getComputedStyle(body) : null;
     const summaryStyle = summary ? window.getComputedStyle(summary) : null;
-    const fileBrowserStyle = fileBrowser ? window.getComputedStyle(fileBrowser) : null;
     const reviewFormStyle = reviewForm ? window.getComputedStyle(reviewForm) : null;
     const filesRect = filesPanel?.getBoundingClientRect();
-    const formRect = formPanel?.getBoundingClientRect();
+    const formRect = reviewForm?.getBoundingClientRect();
     return {
       bodyBackground: bodyStyle?.backgroundColor ?? "",
       summaryBackground: summaryStyle?.backgroundColor ?? "",
-      fileBrowserBackground: fileBrowserStyle?.backgroundColor ?? "",
       reviewFormBackground: reviewFormStyle?.backgroundColor ?? "",
-      formTopAfterFiles: filesRect && formRect ? formRect.top > filesRect.bottom : false,
+      filesPanelBelowForm: filesRect && formRect ? filesRect.top >= formRect.top : false,
     };
   });
   expect(darkDrawerSurface.bodyBackground).not.toBe("rgb(248, 251, 255)");
   expect(darkDrawerSurface.summaryBackground).not.toBe("rgb(255, 255, 255)");
-  expect(darkDrawerSurface.fileBrowserBackground).not.toBe("rgb(255, 255, 255)");
   expect(darkDrawerSurface.reviewFormBackground).not.toBe("rgb(255, 255, 255)");
-  expect(darkDrawerSurface.formTopAfterFiles).toBe(true);
-  await page.locator('[data-testid^="assignment-submission-review-status-"]').selectOption("reviewed");
+  expect(darkDrawerSurface.filesPanelBelowForm).toBe(true);
+  await page.locator('select[data-testid^="assignment-submission-review-status-"]').selectOption("reviewed");
   await page.locator('[data-testid^="assignment-submission-review-comment-"]').fill("书写清晰");
   await page
     .getByTestId("assignment-submission-review-drawer")
@@ -387,13 +387,16 @@ test("学生可在截止前覆盖提交，截止后只读", async ({ page }) => 
     studentNo,
     password,
   });
-  await expect(page.getByText("支持 PDF、Word、Excel、PPT、TXT、JPG、PNG、ZIP，单个文件不超过 100 MB")).toBeVisible();
+  await expect(page.getByTestId(`student-assignment-link-${fixture.futureAssignmentId}`)).toBeVisible();
 
   await page.getByTestId(`student-assignment-link-${fixture.futureAssignmentId}`).click();
   await expect(page).toHaveURL(new RegExp(`/student/assignments/${fixture.futureAssignmentId}$`));
+  await expect(page.getByText("PDF、Word、Excel、PPT、TXT、HTML、Markdown、CSV、JSON、图片、音视频、压缩包")).toBeVisible();
 
   const firstChooserPromise = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "选择文件", exact: true }).click();
+  await page.getByTestId("student-submission-submit").click();
+  await expect(page.getByTestId("student-submission-dialog")).toBeVisible();
+  await page.getByTestId("student-submission-file-open").click();
   const firstChooser = await firstChooserPromise;
   await firstChooser.setFiles({
     name: "first.txt",
@@ -401,23 +404,39 @@ test("学生可在截止前覆盖提交，截止后只读", async ({ page }) => 
     buffer: Buffer.from("first version"),
   });
   await expect(page.getByTestId("student-submission-selection")).toContainText("first.txt");
-  await page.getByTestId("student-submission-submit").click();
+  await page.getByTestId("student-submission-dialog-submit").click();
+  await page.getByTestId("student-submission-confirm-confirm").click();
   await expect(page.getByText("first.txt")).toBeVisible();
 
+  // 同名文件再次提交应替换旧版本
   const secondChooserPromise = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "选择文件", exact: true }).click();
+  await page.getByTestId("student-submission-submit").click();
+  await expect(page.getByTestId("student-submission-dialog")).toBeVisible();
+  await page.getByTestId("student-submission-file-open").click();
   const secondChooser = await secondChooserPromise;
   await secondChooser.setFiles({
-    name: "second.txt",
+    name: "first.txt",
     mimeType: "text/plain",
     buffer: Buffer.from("second version"),
   });
-  await expect(page.getByTestId("student-submission-selection")).toContainText("second.txt");
-  await page.getByTestId("student-submission-submit").click();
-  await expect(page.getByText("second.txt")).toBeVisible();
-  await expect(page.getByText("first.txt")).toHaveCount(0);
+  await expect(page.getByTestId("student-submission-selection")).toContainText("first.txt");
+  await page.getByTestId("student-submission-dialog-submit").click();
+  await page.getByTestId("student-submission-confirm-confirm").click();
+  await expect(page.getByTestId("student-assignment-current-submission")).toContainText("first.txt");
 
-  await page.getByRole("link", { name: "返回列表" }).click();
+  // 同名替换会生成新条目，轮询直到下载链接返回最新版本内容
+  await expect.poll(async () => {
+    const href = await page.locator('[data-testid^="student-assignment-submission-download-"]').first().getAttribute("href");
+    if (!href) {
+      return "";
+    }
+    return page.evaluate(async (url) => {
+      const response = await fetch(url, { credentials: "same-origin" });
+      return response.ok ? response.text() : "";
+    }, href);
+  }, { timeout: 10_000 }).toContain("second version");
+
+  await page.goto("/student/assignments");
   await expect(page).toHaveURL(/\/student\/assignments$/);
 
   await page.getByTestId(`student-assignment-link-${fixture.expiredAssignmentId}`).click();
@@ -425,4 +444,85 @@ test("学生可在截止前覆盖提交，截止后只读", async ({ page }) => 
   await expect(page.getByText("已截止，不能再提交")).toBeVisible();
   await expect(page.getByTestId("student-submission-input")).toHaveCount(0);
   await expect(page.getByTestId("student-submission-submit")).toHaveCount(0);
+});
+
+test("学生可提交 HTML 与 Markdown 并在线上预览效果", async ({ page }) => {
+  await loginAsTeacher(page);
+
+  const suffix = Date.now().toString();
+  const studentNo = `2028${suffix.slice(-6)}`;
+  const displayName = `学生-${suffix.slice(-4)}`;
+  const assignmentTitle = `网页作业-${suffix}`;
+  const password = "student789";
+
+  const fixture = await prepareStudentFixture(page, {
+    studentNo,
+    displayName,
+    futureTitle: assignmentTitle,
+    expiredTitle: `过期作业-${suffix}`,
+  });
+
+  await activateStudent(page, {
+    joinCode: fixture.joinCode,
+    studentNo,
+    password,
+  });
+  await page.getByTestId(`student-assignment-link-${fixture.futureAssignmentId}`).click();
+  await expect(page).toHaveURL(new RegExp(`/student/assignments/${fixture.futureAssignmentId}$`));
+
+  const submitFile = async (name: string, contents: string) => {
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByTestId("student-submission-submit").click();
+    await expect(page.getByTestId("student-submission-dialog")).toBeVisible();
+    await page.getByTestId("student-submission-file-open").click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({
+      name,
+      mimeType: name.endsWith(".html") ? "text/html" : "text/markdown",
+      buffer: Buffer.from(contents),
+    });
+    await expect(page.getByTestId("student-submission-selection")).toContainText(name);
+    await page.getByTestId("student-submission-dialog-submit").click();
+    await page.getByTestId("student-submission-confirm-confirm").click();
+    await expect(page.getByTestId("student-assignment-current-submission")).toContainText(name);
+  };
+
+  await submitFile(
+    "index.html",
+    "<!doctype html><html><body><h1>AI 生成页面</h1><script>document.body.dataset.scripted='yes'</script></body></html>",
+  );
+  await submitFile("实验报告.md", "# 实验报告\n\n**AIGC 生成** 的内容");
+
+  // 学生预览 HTML：沙箱 iframe 渲染出标题
+  await page.locator('[data-testid^="student-assignment-submission-preview-"]', { hasText: "网页" }).first().click();
+  await expect(page.getByTestId("file-preview-html")).toBeVisible();
+  const htmlFrame = page.getByTestId("file-preview-html-frame");
+  await expect(htmlFrame).toBeVisible();
+  await expect(htmlFrame).toHaveAttribute("sandbox", "allow-scripts");
+  const previewFrame = page.frames().find((frame) => frame.url().includes("/preview"));
+  if (!previewFrame) {
+    throw new Error("未找到 HTML 预览 iframe");
+  }
+  await expect(previewFrame.getByRole("heading", { name: "AI 生成页面" })).toBeVisible();
+  await expect(previewFrame.locator("body")).toHaveAttribute("data-scripted", "yes");
+  await page.getByTestId("file-preview-close").click();
+
+  // 学生预览 Markdown：渲染为标题与加粗文本
+  await page.locator('[data-testid^="student-assignment-submission-preview-"]', { hasText: "Markdown" }).first().click();
+  await expect(page.getByTestId("file-preview-markdown")).toContainText("实验报告");
+  await expect(page.getByTestId("file-preview-markdown").locator("h1")).toHaveText("实验报告");
+  await expect(page.getByTestId("file-preview-markdown").locator("strong")).toContainText("AIGC 生成");
+  await page.getByTestId("file-preview-close").click();
+
+  // 老师端批改抽屉中同样可预览 HTML
+  await page.getByTestId("student-logout-submit").click();
+  await expect(page).toHaveURL(/\/student\/login$/);
+  await page.goto(`/assignments/classes/${fixture.classId}/${fixture.futureAssignmentId}`);
+  const submissionRow = page.locator('[data-testid^="assignment-submission-row-"]', { hasText: displayName });
+  await expect(submissionRow).toContainText("index.html");
+  await submissionRow.getByRole("button", { name: "查看/批改" }).click();
+  await expect(page.getByTestId("assignment-submission-review-drawer")).toContainText("index.html");
+  await page.locator('[data-testid^="assignment-submission-file-preview-"]', { hasText: "网页" }).first().click();
+  await expect(page.getByTestId("file-preview-html")).toBeVisible();
+  await expect(page.getByTestId("file-preview-html-frame")).toHaveAttribute("sandbox", "allow-scripts");
 });

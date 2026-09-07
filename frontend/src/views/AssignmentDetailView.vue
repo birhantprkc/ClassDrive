@@ -560,6 +560,7 @@
           :loading="submissionPreviewLoading"
           :error-text="submissionPreviewErrorText"
           :text-content="submissionPreviewTextContent"
+          :markdown-content="submissionPreviewMarkdownContent"
           :can-edit="false"
           :has-previous="submissionPreviewHasPrevious"
           :has-next="submissionPreviewHasNext"
@@ -879,6 +880,7 @@ import { useToastStore } from "@/stores/toast";
 import { useUploadStore } from "@/stores/upload";
 import type { StatusPillTone } from "@/types/status-pill";
 import { getFilePreviewKind, type FilePreviewKind } from "@/utils/file-preview";
+import { renderMarkdownPreview } from "@/utils/markdown-preview";
 import { exportRowsToSpreadsheet } from "@/utils/spreadsheet-export";
 import { assignmentStatusLabel, assignmentStatusTone, reviewStatusLabel, submissionStatusLabel, submissionStatusTone, uiCopy } from "@/utils/ui-copy";
 
@@ -952,6 +954,7 @@ const assignmentMissingRosterTotal = ref(0);
 const assignmentMissingSubmittedTotal = ref(0);
 const submissionPreviewItem = ref<AssignmentAttachmentItem | null>(null);
 const submissionPreviewTextContent = ref("");
+const submissionPreviewMarkdownContent = ref("");
 const submissionPreviewLoading = ref(false);
 const submissionPreviewErrorText = ref("");
 const submissionPreviewTextCache = ref(new Map<number, string>());
@@ -1496,6 +1499,7 @@ function cancelCloseReviewDrawer() {
 function closeSubmissionPreview() {
   submissionPreviewItem.value = null;
   submissionPreviewTextContent.value = "";
+  submissionPreviewMarkdownContent.value = "";
   submissionPreviewLoading.value = false;
   submissionPreviewErrorText.value = "";
 }
@@ -1509,13 +1513,18 @@ async function previewSubmissionItem(item: AssignmentAttachmentItem) {
   submissionPreviewItem.value = previewItem;
   submissionPreviewErrorText.value = "";
   submissionPreviewTextContent.value = "";
-  if (kind !== "text") {
+  submissionPreviewMarkdownContent.value = "";
+  if (kind !== "text" && kind !== "markdown") {
     submissionPreviewLoading.value = false;
     return;
   }
   const cached = submissionPreviewTextCache.value.get(previewItem.id);
   if (cached !== undefined) {
-    submissionPreviewTextContent.value = cached;
+    if (kind === "markdown") {
+      submissionPreviewMarkdownContent.value = renderMarkdownPreview(cached);
+    } else {
+      submissionPreviewTextContent.value = cached;
+    }
     submissionPreviewLoading.value = false;
     return;
   }
@@ -1527,7 +1536,11 @@ async function previewSubmissionItem(item: AssignmentAttachmentItem) {
     }
     const text = await response.text();
     submissionPreviewTextCache.value.set(previewItem.id, text);
-    submissionPreviewTextContent.value = text;
+    if (kind === "markdown") {
+      submissionPreviewMarkdownContent.value = renderMarkdownPreview(text);
+    } else {
+      submissionPreviewTextContent.value = text;
+    }
   } catch {
     submissionPreviewErrorText.value = "预览失败，请下载后查看。";
   } finally {

@@ -295,6 +295,7 @@
       :loading="currentPreviewLoading"
       :error-text="currentPreviewErrorText"
       :text-content="currentPreviewTextContent"
+      :markdown-content="currentPreviewMarkdownContent"
       :can-edit="false"
       :has-previous="currentPreviewHasPrevious"
       :has-next="currentPreviewHasNext"
@@ -476,6 +477,7 @@ import StatePanel from "@/components/StatePanel.vue";
 import { formatStudentAssignmentDateTime } from "@/composables/useStudentAssignments";
 import { useStudentAssignmentDetail } from "@/composables/useStudentAssignmentDetail";
 import { getFilePreviewKind } from "@/utils/file-preview";
+import { renderMarkdownPreview } from "@/utils/markdown-preview";
 import { studentAssignmentStatusLabel, studentAssignmentStatusTone, uiCopy } from "@/utils/ui-copy";
 
 const route = useRoute();
@@ -490,6 +492,7 @@ const pendingDeleteItem = ref<AssignmentAttachmentItem | null>(null);
 const submissionFeedbackText = ref("");
 const currentPreviewItem = ref<AssignmentAttachmentItem | null>(null);
 const currentPreviewTextContent = ref("");
+const currentPreviewMarkdownContent = ref("");
 const currentPreviewLoading = ref(false);
 const currentPreviewErrorText = ref("");
 const currentPreviewTextCache = ref(new Map<number, string>());
@@ -497,11 +500,22 @@ const studentSubmissionFileInputId = "student-submission-file-input";
 const studentSubmissionDirectoryInputId = "student-submission-directory-input";
 
 const submissionTypeExtensions = {
-  mixed: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".jpg", ".jpeg", ".png", ".zip", ".rar", ".7z"],
-  image: [".jpg", ".jpeg", ".png"],
-  word: [".doc", ".docx"],
+  mixed: [
+    ".pdf", ".doc", ".docx", ".rtf", ".odt",
+    ".xls", ".xlsx", ".csv",
+    ".ppt", ".pptx",
+    ".txt", ".md", ".markdown", ".html", ".htm",
+    ".json", ".xml",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".tif", ".tiff", ".avif",
+    ".mp3", ".wav", ".m4a", ".ogg", ".flac",
+    ".mp4", ".webm", ".mov", ".avi", ".mkv", ".wmv",
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz",
+    ".wps", ".et", ".dps",
+  ],
+  image: [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".tif", ".tiff", ".avif"],
+  word: [".doc", ".docx", ".rtf", ".odt"],
   pdf: [".pdf"],
-  archive: [".zip", ".rar", ".7z"],
+  archive: [".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"],
 } satisfies Record<AssignmentSubmissionTypeCategory, readonly string[]>;
 
 type SubmissionFileViewMode = "grid" | "list";
@@ -804,6 +818,7 @@ function toPreviewItem(item: AssignmentAttachmentItem) {
 function closeCurrentSubmissionPreview() {
   currentPreviewItem.value = null;
   currentPreviewTextContent.value = "";
+  currentPreviewMarkdownContent.value = "";
   currentPreviewLoading.value = false;
   currentPreviewErrorText.value = "";
 }
@@ -817,13 +832,18 @@ async function openCurrentSubmissionPreview(item: AssignmentAttachmentItem | nul
   currentPreviewItem.value = previewItem;
   currentPreviewErrorText.value = "";
   currentPreviewTextContent.value = "";
-  if (kind !== "text") {
+  currentPreviewMarkdownContent.value = "";
+  if (kind !== "text" && kind !== "markdown") {
     currentPreviewLoading.value = false;
     return;
   }
   const cached = currentPreviewTextCache.value.get(previewItem.id);
   if (cached !== undefined) {
-    currentPreviewTextContent.value = cached;
+    if (kind === "markdown") {
+      currentPreviewMarkdownContent.value = renderMarkdownPreview(cached);
+    } else {
+      currentPreviewTextContent.value = cached;
+    }
     currentPreviewLoading.value = false;
     return;
   }
@@ -835,7 +855,11 @@ async function openCurrentSubmissionPreview(item: AssignmentAttachmentItem | nul
     }
     const text = await response.text();
     currentPreviewTextCache.value.set(previewItem.id, text);
-    currentPreviewTextContent.value = text;
+    if (kind === "markdown") {
+      currentPreviewMarkdownContent.value = renderMarkdownPreview(text);
+    } else {
+      currentPreviewTextContent.value = text;
+    }
   } catch {
     currentPreviewErrorText.value = uiCopy.previewLoadFailed;
   } finally {

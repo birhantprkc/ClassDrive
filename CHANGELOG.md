@@ -2,6 +2,42 @@
 
 本文档记录 ClassDrive 的版本更新历史和重要变更。
 
+## [1.9] - 2026-09-07
+
+### Added - 新增功能
+
+- **作业提交格式大幅扩展（AIGC 友好）**：
+  - “常用文件”类别新增 HTML（.html/.htm）、Markdown（.md/.markdown）、CSV、JSON、XML、RTF、ODT、GIF、WEBP、SVG、BMP、TIFF、AVIF、MP3、WAV、M4A、OGG、FLAC、MP4、WEBM、MOV、AVI、MKV、WMV、TAR、GZ、TGZ、WPS（.wps/.et/.dps）等格式
+  - 图片类别同步支持 GIF、WEBP、SVG、BMP、TIFF、AVIF；Word 类别支持 RTF、ODT；压缩包类别支持 TAR、GZ、TGZ
+- **HTML 在线预览**：学生提交的 AI 生成网页（含内嵌脚本）可在沙箱环境中在线预览效果，脚本无法访问系统数据；Markdown 文件在线渲染预览（表格、代码块、图片等）
+- **预览接口补全**：学生本人提交文件、作业附件（教师端与学生端）新增独立的内联预览接口，PDF/HTML 等在预览弹窗中直接渲染，不再依赖下载接口回退
+
+### Fixed - 问题修复
+
+- **资料页重命名文件夹报“服务器内部错误”**：
+  - 现象：重命名文件正常，重命名文件夹（含子文件/子文件夹）必现 500
+  - 原因：SQLite DSN 中的 `_busy_timeout` / `_journal_mode` 参数写法不被 modernc.org/sqlite 驱动识别（驱动只识别 `_pragma` 形式），实际运行在默认 rollback-journal 模式且无忙等待；重命名目录时在未关闭的查询游标上执行更新，与其他连接产生 SQLITE_BUSY
+  - 修复：改用 `_pragma=busy_timeout(5000)` 等正确参数并启用 WAL；`renameDescendants` 改为先收集再批量更新，磁盘重命名失败时自动回滚
+- **文件夹重命名线上加固**（v1.9 发布前追加）：
+  - 磁盘与数据库状态对账：旧版本 500 失败会留下“磁盘已改名、数据库未更新”的残留，此前会导致同一文件夹永远无法再重命名；现在自动识别并采用磁盘现状，跳过物理改名直接修复数据库
+  - 直接改名被占用（`Access is denied`）时自动切换复制通道：完整复制到新名字并清理旧目录，重命名不再因杀毒/同步盘/资源管理器占用目录而失败
+  - 物理目录缺失（历史数据/备份恢复）时自动补建后再改名，不再报“文件不存在”
+  - Windows 上目录被短暂占用时先自动重试（最多 5 次、递增退避），目标存在遗留空目录时先清理再改名
+  - 持久失败不再返回笼统 500，改为提示“文件夹正被其他程序占用，请关闭正在访问它的程序后重试”（真实原因写入服务端日志）
+  - 后代路径批量更新放入单个事务（缩短写锁窗口、失败整体回滚）；`item_path like` 查询对 `%`、`_`、`\` 做转义，目录名含通配符时不会误改兄弟目录
+  - 新增回归测试：特殊字符目录名、物理目录缺失、旧版本残留对账、占用时复制回退、班级空间文件夹重命名
+- **文件/文件夹名可传 `..` 或 `.`**：`path.Join` 归一化后可能与伪根目录重合，删除此类目录会波及整个空间目录。现在名称校验拒绝 `.`、`..`，并拒绝 Windows 保留名（CON、NUL、COM1…）、非法字符与句点结尾的名称
+- **Markdown 文件 MIME 识别**：Go 内置 mime 表不含 `.md`，此前会被识别为 `text/plain` 而无法触发 Markdown 渲染预览；后端补充 `text/markdown` 映射，前端预览类型判定也改为扩展名优先于通用 `text/*` MIME
+- **Playwright E2E 套件修复**：`page.evaluate` 内的原始 fetch 助手未携带 X-CSRF-Token（被双提交 CSRF 拦截），且大量断言停留在旧版 UI（列表视图默认、已删除的测试 ID、过期的格式文案等），已同步修复并新增“文件夹重命名（含子项）”“HTML/Markdown 提交与在线预览”两条端到端用例；视觉回归基线在本机重新采集
+- 同步更新学生提交格式提示文案（“常用文件”格式说明）
+
+### Technical Details - 技术细节
+
+- 后端预览响应对 HTML/SVG 增加 `Content-Security-Policy: sandbox` 与 `X-Content-Type-Options: nosniff`，直接新标签页打开也不会以同源身份执行脚本
+- 前端预览新增 `html` / `markdown` 两类：HTML 走 `sandbox="allow-scripts"` 的 iframe，Markdown 使用 marked + DOMPurify 净化后渲染
+- 新增依赖：`marked`、`dompurify`
+- 新增回归测试：文件夹重命名（含子项）、新格式提交与安全预览头、附件预览路由、危险名称拒绝
+
 ## [1.8] - 2026-09-02
 
 ### Added - 新增功能

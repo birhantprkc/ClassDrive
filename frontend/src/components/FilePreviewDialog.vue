@@ -75,6 +75,18 @@
         <audio v-else-if="kind === 'audio'" class="preview-dialog__media" data-testid="file-preview-audio" controls :src="item.previewUrl"></audio>
         <video v-else-if="kind === 'video'" class="preview-dialog__media preview-dialog__video" data-testid="file-preview-video" controls :src="item.previewUrl"></video>
         <pre v-else-if="kind === 'text'" class="preview-dialog__text" data-testid="file-preview-text">{{ textContent }}</pre>
+        <div v-else-if="kind === 'html'" class="preview-dialog__html-shell" data-testid="file-preview-html">
+          <p class="preview-dialog__sandbox-hint">沙箱预览：网页脚本在受限环境中运行，无法访问本系统数据。</p>
+          <iframe
+            class="preview-dialog__frame"
+            data-testid="file-preview-html-frame"
+            :src="item.previewUrl"
+            sandbox="allow-scripts"
+            referrerpolicy="no-referrer"
+            title="HTML 沙箱预览"
+          ></iframe>
+        </div>
+        <div v-else-if="kind === 'markdown'" class="preview-dialog__markdown" data-testid="file-preview-markdown" v-html="markdownContent"></div>
         <div v-else class="preview-dialog__unsupported" data-testid="file-preview-external">
           <p>该文件不支持预览，可下载后查看。</p>
           <a class="button button--primary" :href="item.downloadUrl" target="_blank" rel="noreferrer">下载文件</a>
@@ -104,12 +116,14 @@ const props = withDefaults(defineProps<{
   loading: boolean;
   errorText: string;
   textContent: string;
+  markdownContent?: string;
   canEdit: boolean;
   hasPrevious?: boolean;
   hasNext?: boolean;
 }>(), {
   hasPrevious: false,
   hasNext: false,
+  markdownContent: "",
 });
 
 const emit = defineEmits<{
@@ -268,6 +282,117 @@ watch(
 .preview-dialog--maximized .preview-dialog__video {
   height: 100%;
   min-height: 0;
+}
+
+.preview-dialog__html-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 70vh;
+}
+
+.preview-dialog__html-shell .preview-dialog__frame {
+  flex: 1;
+  min-height: 60vh;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.preview-dialog__sandbox-hint {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--control-bg);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.preview-dialog__markdown {
+  margin: 0;
+  min-height: 62vh;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  padding: 18px 22px;
+  background: var(--modal-surface);
+  color: var(--text-primary);
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.preview-dialog--maximized .preview-dialog__markdown {
+  min-height: 100%;
+}
+
+.preview-dialog__markdown :deep(h1),
+.preview-dialog__markdown :deep(h2),
+.preview-dialog__markdown :deep(h3) {
+  margin: 0.9em 0 0.5em;
+  line-height: 1.3;
+}
+
+.preview-dialog__markdown :deep(h1:first-child),
+.preview-dialog__markdown :deep(h2:first-child),
+.preview-dialog__markdown :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.preview-dialog__markdown :deep(p),
+.preview-dialog__markdown :deep(ul),
+.preview-dialog__markdown :deep(ol) {
+  margin: 0.6em 0;
+}
+
+.preview-dialog__markdown :deep(pre),
+.preview-dialog__markdown :deep(code) {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+
+.preview-dialog__markdown :deep(pre) {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--control-bg);
+  overflow: auto;
+}
+
+.preview-dialog__markdown :deep(code) {
+  background: var(--control-bg);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+.preview-dialog__markdown :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.preview-dialog__markdown :deep(a) {
+  color: var(--accent, #2563eb);
+}
+
+.preview-dialog__markdown :deep(img) {
+  max-width: 100%;
+}
+
+.preview-dialog__markdown :deep(blockquote) {
+  margin: 0.8em 0;
+  padding: 4px 14px;
+  border-left: 3px solid var(--border-soft);
+  color: var(--text-secondary);
+}
+
+.preview-dialog__markdown :deep(table) {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+}
+
+.preview-dialog__markdown :deep(th),
+.preview-dialog__markdown :deep(td) {
+  border: 1px solid var(--border-soft);
+  padding: 6px 12px;
 }
 
 .preview-dialog__media {

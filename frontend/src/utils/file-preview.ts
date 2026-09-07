@@ -1,11 +1,9 @@
 import type { FileItem } from "@/api/client";
 
-export type FilePreviewKind = "image" | "pdf" | "audio" | "video" | "text" | "external";
+export type FilePreviewKind = "image" | "pdf" | "audio" | "video" | "text" | "html" | "markdown" | "external";
 
 const textExtensions = new Set([
   ".txt",
-  ".md",
-  ".markdown",
   ".csv",
   ".tsv",
   ".json",
@@ -17,9 +15,18 @@ const textExtensions = new Set([
   ".ts",
   ".tsx",
   ".jsx",
-  ".html",
   ".css",
   ".vue",
+]);
+
+const htmlExtensions = new Set([
+  ".html",
+  ".htm",
+]);
+
+const markdownExtensions = new Set([
+  ".md",
+  ".markdown",
 ]);
 
 const imageExtensions = new Set([
@@ -86,6 +93,28 @@ export function getFilePreviewKind(item: Pick<FileItem, "kind" | "name"> & { mim
   if (mimeType.startsWith("video/")) {
     return "video";
   }
+  if (mimeType === "text/html") {
+    return "html";
+  }
+  if (mimeType === "text/markdown") {
+    return "markdown";
+  }
+
+  // 扩展名优先于通用 text/* MIME：上传端可能把 Markdown/HTML 识别为 text/plain
+  const extension = extensionOf(item.name);
+  if (htmlExtensions.has(extension)) {
+    return "html";
+  }
+  if (markdownExtensions.has(extension)) {
+    return "markdown";
+  }
+  if (imageExtensions.has(extension)) {
+    return "image";
+  }
+  if (pdfExtensions.has(extension)) {
+    return "pdf";
+  }
+
   if (
     mimeType.startsWith("text/") ||
     mimeType === "application/json" ||
@@ -93,15 +122,6 @@ export function getFilePreviewKind(item: Pick<FileItem, "kind" | "name"> & { mim
     mimeType === "application/javascript"
   ) {
     return "text";
-  }
-
-  const extension = extensionOf(item.name);
-  if (imageExtensions.has(extension)) {
-    return "image";
-  }
-
-  if (pdfExtensions.has(extension)) {
-    return "pdf";
   }
 
   if (textExtensions.has(extension)) {
